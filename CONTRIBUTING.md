@@ -1,26 +1,15 @@
 # Contributing
 
-This repository is part of the Quantova post-quantum stack. Before contributing, read `HANDOFF.md`
-in the Quantova-Specs repo; `POLICY-crypto.md` there is the supreme law. Any conflict with the crypto
-policy → STOP AND REPORT.
+This repository is part of the Quantova post quantum stack. Before you contribute, read the crypto policy and the handoff in the Quantova Specs repository. The crypto policy is the supreme law. If anything you are asked to do conflicts with it, stop and report.
 
-## Cryptography (non-negotiable)
-Only NIST post-quantum algorithms exist in this stack: ML-KEM (FIPS 203), ML-DSA (FIPS 204), SLH-DSA
-(FIPS 205), FN-DSA (on final publication), SHA-3/SHAKE (FIPS 202), 256-bit symmetric, and hash-based
-STARKs. Classical cryptography (RSA, DH/DSA, all elliptic curves, all pairings, ecrecover) is
-unrepresentable. Banned crates — including transitive and dev-dependencies — are enforced by
-`cargo deny check` (see `deny.toml`): k256, ed25519-dalek, curve25519-dalek, p256, secp256k1, rsa,
-bls12_381, arkworks pairing crates, openssl EC/RSA. The only exempt repo is Q-Oracle, and nothing
-imports it.
+## Cryptography
 
-## Commits & PRs
-- Author only as the owner: `quantova-inc` / `Quantovaorg@gmail.com`. No AI attribution anywhere.
-- Conventional Commits (`feat:` `fix:` `spec:` `test:` `bench:` `chore:`). Clean code, minimal
-  comments, no slop. Write every commit as if the repo goes public tomorrow.
-- Never push to `main`. Branch `feat/<scope>` or `spec/<area>`, open a PR, merge only on green CI.
-- Every PR cites the SPEC section it implements. Cross-repo dependencies pin git tags.
+Only the NIST post quantum algorithms exist in this stack. These are ML KEM from FIPS 203, ML DSA from FIPS 204, SLH DSA from FIPS 205, FN DSA once it is final, SHA 3 and SHAKE from FIPS 202, the 256 bit symmetric primitives, and hash based STARKs. Classical cryptography cannot be expressed. The banned crates, including transitive and development dependencies, are enforced by cargo deny using the deny file. The one exempt repository is Q Oracle, and nothing imports it.
+
+## Commits and pull requests
+
+Author every commit as the repository owner only, with no other attribution anywhere. Write clean code with few comments and no filler. Never push straight to main. Work on a feature branch, open a pull request, and merge only when the checks are green. Every pull request names the specification section it implements. Cross repo dependencies pin git tags.
 
 ## Claims discipline
-SAY "sub-second deterministic finality", "100k+ TPS via batch proofs and parallel execution",
-"near-trustless Bitcoin deposits", "trust-minimized exits". NEVER "millisecond global finality",
-"fully trustless bridge", "quantum-proof".
+
+Say sub second deterministic finality, one hundred thousand or more transactions per second through batch proofs and parallel execution, near trustless Bitcoin deposits, and trust minimized exits. Never say millisecond global finality, fully trustless bridge, or quantum proof.
