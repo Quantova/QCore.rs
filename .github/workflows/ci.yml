@@ -1,0 +1,6 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  ci:
+    uses: Quantova/Quantova-Ci/.github/workflows/rust-ci.yml@main
+
