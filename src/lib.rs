@@ -152,6 +152,63 @@ pub fn valid_address(address: &str) -> bool {
     qtv_idfmt::parse_address(address).is_ok()
 }
 
+/// The standard English word list, one word per line.
+fn word_list() -> Vec<&'static str> {
+    include_str!("english.txt").lines().collect()
+}
+
+/// The recovery phrase for a master seed. The phrase carries the thirty two seed bytes and an
+pub fn mnemonic_from_seed(seed: &[u8; SEED_LEN]) -> String {
+    let words = word_list();
+    let checksum = qtv_crypto::sha3::sha3_256(seed)[0];
+    let mut bits: Vec<u8> = Vec::with_capacity(SEED_LEN * 8 + 8);
+    for &byte in seed.iter() {
+        for shift in (0..8).rev() {
+            bits.push((byte >> shift) & 1);
+        }
+    }
+    for shift in (0..8).rev() {
+        bits.push((checksum >> shift) & 1);
+    }
+    bits.chunks(11)
+        .map(|chunk| {
+            let index = chunk.iter().fold(0usize, |acc, &bit| (acc << 1) | bit as usize);
+            words[index]
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The master seed a recovery phrase carries, or an error if the phrase is the wrong length, has
+pub fn seed_from_mnemonic(phrase: &str) -> Result<[u8; SEED_LEN], String> {
+    let words = word_list();
+    let entered: Vec<&str> = phrase.split_whitespace().collect();
+    if entered.len() != 24 {
+        return Err("a recovery phrase is twenty four words".to_string());
+    }
+    let mut bits: Vec<u8> = Vec::with_capacity(24 * 11);
+    for word in &entered {
+        let index = words
+            .iter()
+            .position(|candidate| candidate == word)
+            .ok_or("a word in the phrase is not in the word list")?;
+        for shift in (0..11).rev() {
+            bits.push(((index >> shift) & 1) as u8);
+        }
+    }
+    let mut seed = [0u8; SEED_LEN];
+    for (i, byte) in seed.iter_mut().enumerate() {
+        *byte = bits[i * 8..i * 8 + 8].iter().fold(0u8, |acc, &bit| (acc << 1) | bit);
+    }
+    let checksum = bits[SEED_LEN * 8..SEED_LEN * 8 + 8]
+        .iter()
+        .fold(0u8, |acc, &bit| (acc << 1) | bit);
+    if checksum != qtv_crypto::sha3::sha3_256(&seed)[0] {
+        return Err("the recovery phrase checksum does not match, check for a typo".to_string());
+    }
+    Ok(seed)
+}
+
 /// Parse a node info response.
 pub fn parse_node_info(response: &str) -> Result<NodeInfo, String> {
     let v = json::parse(response)?;
@@ -333,5 +390,22 @@ mod tests {
     fn a_repeated_key_reads_the_last_value_like_a_browser() {
         let v = crate::json::parse("{\"n\":\"1\",\"n\":\"9\"}").unwrap();
         assert_eq!(v.get("n").and_then(crate::json::Json::as_str), Some("9"));
+    }
+
+    #[test]
+    fn a_seed_round_trips_through_its_recovery_phrase() {
+        let seed = [7u8; SEED_LEN];
+        let phrase = mnemonic_from_seed(&seed);
+        assert_eq!(phrase.split_whitespace().count(), 24);
+        assert_eq!(seed_from_mnemonic(&phrase).unwrap(), seed);
+        // the phrase recovers the account the seed signs from
+        assert_eq!(
+            account_address(&seed_from_mnemonic(&phrase).unwrap(), 0),
+            account_address(&seed, 0)
+        );
+        // a mistyped word is refused by the checksum
+        let mut words: Vec<&str> = phrase.split_whitespace().collect();
+        words[0] = if words[0] == "abandon" { "ability" } else { "abandon" };
+        assert!(seed_from_mnemonic(&words.join(" ")).is_err());
     }
 }
