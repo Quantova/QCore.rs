@@ -29,7 +29,28 @@ pub struct SignedTransfer {
     pub tx_bytes: Vec<u8>,
 }
 
-/// Build and sign a native transfer. The amount is encoded into the call the same way
+/// Build and sign a call to a target with its arguments already encoded. A native transfer
+pub fn sign_call(
+    seed: &[u8; SEED_LEN],
+    index: u64,
+    target: &str,
+    args: Vec<u8>,
+    nonce: u64,
+    meter_limit: u64,
+    fee: u128,
+) -> SignedTransfer {
+    let sender = derive(seed, index);
+    let call = Call::new(target.to_string(), args);
+    let body = Body::new(sender.address(), nonce, meter_limit, fee, call);
+    let wrapper = sign(&sender, &body);
+    SignedTransfer {
+        from: sender.address(),
+        tx_id: wrapper.id(),
+        tx_bytes: to_bytes(&wrapper),
+    }
+}
+
+/// Build and sign a native transfer. The amount is encoded into the call the way the node
 pub fn sign_transfer(
     seed: &[u8; SEED_LEN],
     index: u64,
@@ -38,17 +59,9 @@ pub fn sign_transfer(
     nonce: u64,
     fee: u128,
 ) -> SignedTransfer {
-    let sender = derive(seed, index);
     let mut encoder = Encoder::new();
     encoder.put_u64(amount);
-    let call = Call::new(to.to_string(), encoder.into_bytes());
-    let body = Body::new(sender.address(), nonce, NATIVE_TRANSFER_METER, fee, call);
-    let wrapper = sign(&sender, &body);
-    SignedTransfer {
-        from: sender.address(),
-        tx_id: wrapper.id(),
-        tx_bytes: to_bytes(&wrapper),
-    }
+    sign_call(seed, index, to, encoder.into_bytes(), nonce, NATIVE_TRANSFER_METER, fee)
 }
 
 // The wire encoders and decoders. A binding calls these so the host never builds a
@@ -204,7 +217,7 @@ mod client {
             Client { base: base.into() }
         }
 
-        fn call(&self, method: &str, body: String) -> Result<String, String> {
+        fn rpc(&self, method: &str, body: String) -> Result<String, String> {
             let (status, text) = http::post(&self.base, &format!("/v1/{method}"), &body)?;
             if status == 200 {
                 Ok(text)
@@ -214,19 +227,19 @@ mod client {
         }
 
         pub fn node_info(&self) -> Result<NodeInfo, String> {
-            parse_node_info(&self.call("node_info", "{}".to_string())?)
+            parse_node_info(&self.rpc("node_info", "{}".to_string())?)
         }
 
         pub fn account(&self, address: &str) -> Result<Account, String> {
-            parse_account(&self.call("get_account", account_body(address))?)
+            parse_account(&self.rpc("get_account", account_body(address))?)
         }
 
         pub fn submit(&self, tx_bytes: &[u8]) -> Result<Submit, String> {
-            parse_submit(&self.call("submit_transaction", submit_body(tx_bytes))?)
+            parse_submit(&self.rpc("submit_transaction", submit_body(tx_bytes))?)
         }
 
         pub fn transaction(&self, tx_id: &str) -> Result<TxStatus, String> {
-            parse_transaction(&self.call("get_transaction", transaction_body(tx_id))?)
+            parse_transaction(&self.rpc("get_transaction", transaction_body(tx_id))?)
         }
 
         /// Read node info for the fee, read the sender's nonce, sign the transfer, and
@@ -244,5 +257,39 @@ mod client {
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome))
         }
+
+        /// Read the fee and the sender's nonce, sign a call to a target with the given meter
+        pub fn call(
+            &self,
+            seed: &[u8; SEED_LEN],
+            index: u64,
+            target: &str,
+            args: Vec<u8>,
+            meter_limit: u64,
+        ) -> Result<(SignedTransfer, Submit), String> {
+            let info = self.node_info()?;
+            let sender = account_address(seed, index);
+            let account = self.account(&sender)?;
+            let signed = sign_call(seed, index, target, args, account.nonce, meter_limit, info.transfer_fee);
+            let outcome = self.submit(&signed.tx_bytes)?;
+            Ok((signed, outcome))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_transfer_is_a_call_that_encodes_the_amount() {
+        let seed = [7u8; SEED_LEN];
+        let to = account_address(&seed, 0);
+        let transfer = sign_transfer(&seed, 0, &to, 1000, 3, 500);
+        let mut encoder = Encoder::new();
+        encoder.put_u64(1000);
+        let call = sign_call(&seed, 0, &to, encoder.into_bytes(), 3, NATIVE_TRANSFER_METER, 500);
+        assert_eq!(transfer.tx_bytes, call.tx_bytes);
+        assert_eq!(transfer.tx_id, call.tx_id);
     }
 }
