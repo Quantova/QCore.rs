@@ -56,7 +56,9 @@ impl Json {
 
     pub fn get(&self, key: &str) -> Option<&Json> {
         match self {
-            Json::Object(fields) => fields.iter().find(|(k, _)| k == key).map(|(_, v)| v),
+            // The last value wins when a key repeats, which is what a browser and Python
+            // JSON reader do, so a response cannot be read one way here and another there.
+            Json::Object(fields) => fields.iter().rev().find(|(k, _)| k == key).map(|(_, v)| v),
             _ => None,
         }
     }
@@ -108,10 +110,14 @@ fn write_string(s: &str, out: &mut String) {
     out.push('"');
 }
 
+/// The deepest a response may nest. A gateway reply nests a handful of levels at most, so
+const MAX_DEPTH: usize = 128;
+
 pub fn parse(input: &str) -> Result<Json, String> {
     let mut parser = Parser {
         chars: input.chars().collect(),
         pos: 0,
+        depth: 0,
     };
     parser.skip_ws();
     let value = parser.value()?;
@@ -125,6 +131,7 @@ pub fn parse(input: &str) -> Result<Json, String> {
 struct Parser {
     chars: Vec<char>,
     pos: usize,
+    depth: usize,
 }
 
 impl Parser {
@@ -149,14 +156,25 @@ impl Parser {
     fn value(&mut self) -> Result<Json, String> {
         self.skip_ws();
         match self.peek() {
-            Some('{') => self.object(),
-            Some('[') => self.array(),
+            Some('{') => self.nested(Parser::object),
+            Some('[') => self.nested(Parser::array),
             Some('"') => Ok(Json::Str(self.string()?)),
             Some('t') | Some('f') => self.boolean(),
             Some('n') => self.null(),
             Some(c) if c == '-' || c.is_ascii_digit() => self.number(),
             _ => Err("expected a JSON value".to_string()),
         }
+    }
+
+    /// Parse one nested value, an object or an array, counting the depth so a hostile reply
+    fn nested(&mut self, parse: fn(&mut Parser) -> Result<Json, String>) -> Result<Json, String> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err("the JSON is nested too deep".to_string());
+        }
+        let value = parse(self);
+        self.depth -= 1;
+        value
     }
 
     fn object(&mut self) -> Result<Json, String> {
@@ -225,7 +243,7 @@ impl Parser {
                     Some('t') => s.push('\t'),
                     Some('b') => s.push('\u{0008}'),
                     Some('f') => s.push('\u{000c}'),
-                    Some('u') => s.push(self.unicode_escape()?),
+                    Some('u') => s.push(self.unicode_char()?),
                     _ => return Err("bad escape in a string".to_string()),
                 },
                 Some(c) => s.push(c),
@@ -234,7 +252,8 @@ impl Parser {
         }
     }
 
-    fn unicode_escape(&mut self) -> Result<char, String> {
+    /// Read one four digit hex escape into its code unit.
+    fn hex4(&mut self) -> Result<u32, String> {
         let mut code = 0u32;
         for _ in 0..4 {
             let digit = self
@@ -243,7 +262,27 @@ impl Parser {
                 .ok_or("bad unicode escape")?;
             code = code * 16 + digit;
         }
-        char::from_u32(code).ok_or_else(|| "bad unicode code point".to_string())
+        Ok(code)
+    }
+
+    /// Read a `\u` escape into a character, joining a surrogate pair when one is present, so a
+    fn unicode_char(&mut self) -> Result<char, String> {
+        let hi = self.hex4()?;
+        if (0xD800..=0xDBFF).contains(&hi) {
+            if self.next() != Some('\\') || self.next() != Some('u') {
+                return Err("a high surrogate with no low surrogate".to_string());
+            }
+            let lo = self.hex4()?;
+            if !(0xDC00..=0xDFFF).contains(&lo) {
+                return Err("a bad surrogate pair".to_string());
+            }
+            let code = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
+            return char::from_u32(code).ok_or_else(|| "bad unicode code point".to_string());
+        }
+        if (0xDC00..=0xDFFF).contains(&hi) {
+            return Err("a low surrogate with no high surrogate".to_string());
+        }
+        char::from_u32(hi).ok_or_else(|| "bad unicode code point".to_string())
     }
 
     fn number(&mut self) -> Result<Json, String> {
@@ -320,6 +359,8 @@ fn nibble(c: u8) -> Result<u8, String> {
         b'0'..=b'9' => Ok(c - b'0'),
         b'a'..=b'f' => Ok(c - b'a' + 10),
         b'A'..=b'F' => Ok(c - b'A' + 10),
-        _ => Err(format!("'{}' is not a hex digit", c as char)),
+        // The offending character is not echoed, since this same decoder reads a seed and
+        // an error must not carry a piece of a secret.
+        _ => Err("the value has a non hex character".to_string()),
     }
 }

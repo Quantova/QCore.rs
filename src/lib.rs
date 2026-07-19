@@ -142,6 +142,16 @@ fn field_u128(v: &Json, key: &str) -> Result<u128, String> {
         .map_err(|_| format!("the {key} field is not a number string"))
 }
 
+fn field_u8(v: &Json, key: &str) -> Result<u8, String> {
+    let n = field_u64(v, key)?;
+    u8::try_from(n).map_err(|_| format!("the {key} field is out of range for a byte"))
+}
+
+/// Whether an address parses as a Quantova q1 address. A caller checks a recipient or a
+pub fn valid_address(address: &str) -> bool {
+    qtv_idfmt::parse_address(address).is_ok()
+}
+
 /// Parse a node info response.
 pub fn parse_node_info(response: &str) -> Result<NodeInfo, String> {
     let v = json::parse(response)?;
@@ -163,7 +173,7 @@ pub fn parse_account(response: &str) -> Result<Account, String> {
         address: field_str(&v, "address")?,
         nonce: field_u64(&v, "nonce")?,
         balance: field_u128(&v, "balance")?,
-        scheme: field_u64(&v, "scheme")? as u8,
+        scheme: field_u8(&v, "scheme")?,
         has_key: v.get("has_key").and_then(Json::as_bool).unwrap_or(false),
     })
 }
@@ -242,7 +252,7 @@ mod client {
             parse_transaction(&self.rpc("get_transaction", transaction_body(tx_id))?)
         }
 
-        /// Read node info for the fee, read the sender's nonce, sign the transfer, and
+        /// Read node info for the fee, read the sender's nonce, sign the transfer, and submit
         pub fn transfer(
             &self,
             seed: &[u8; SEED_LEN],
@@ -250,6 +260,9 @@ mod client {
             to: &str,
             amount: u64,
         ) -> Result<(SignedTransfer, Submit), String> {
+            if !valid_address(to) {
+                return Err("the recipient is not a q1 address".to_string());
+            }
             let info = self.node_info()?;
             let sender = account_address(seed, index);
             let account = self.account(&sender)?;
@@ -291,5 +304,34 @@ mod tests {
         let call = sign_call(&seed, 0, &to, encoder.into_bytes(), 3, NATIVE_TRANSFER_METER, 500);
         assert_eq!(transfer.tx_bytes, call.tx_bytes);
         assert_eq!(transfer.tx_id, call.tx_id);
+    }
+
+    #[test]
+    fn a_deeply_nested_response_is_refused_not_crashed() {
+        let deep = "[".repeat(100_000) + &"]".repeat(100_000);
+        assert!(crate::json::parse(&deep).is_err());
+        let deep_obj = "{\"a\":".repeat(100_000);
+        assert!(crate::json::parse(&deep_obj).is_err());
+    }
+
+    #[test]
+    fn bad_hex_is_a_clean_error_that_carries_no_input() {
+        assert!(crate::json::from_hex("abc").is_err());
+        let err = crate::json::from_hex("zz").unwrap_err();
+        assert!(!err.contains('z'));
+    }
+
+    #[test]
+    fn valid_address_accepts_a_derived_address_and_rejects_junk() {
+        let address = account_address(&[7u8; SEED_LEN], 0);
+        assert!(valid_address(&address));
+        assert!(!valid_address("not an address"));
+        assert!(!valid_address(""));
+    }
+
+    #[test]
+    fn a_repeated_key_reads_the_last_value_like_a_browser() {
+        let v = crate::json::parse("{\"n\":\"1\",\"n\":\"9\"}").unwrap();
+        assert_eq!(v.get("n").and_then(crate::json::Json::as_str), Some("9"));
     }
 }
