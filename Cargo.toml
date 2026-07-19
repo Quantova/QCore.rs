@@ -1,0 +1,26 @@
+[package]
+name = "qcore"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+description = "The Quantova post quantum client core in Rust. One implementation of key derivation, transaction building, quantum safe signing with the ML-DSA-65 module lattice scheme, and the Quantova gateway wire, that the JavaScript and Python bindings are generated over so no client ever hand rolls a signature or the wire."
+repository = "https://github.com/Quantova/QCore.rs"
+keywords = ["post-quantum", "blockchain", "cryptography", "wallet", "quantova"]
+categories = ["cryptography", "cryptography::cryptocurrencies"]
+
+[features]
+# The native client and its HTTP transport. On by default for Rust and native callers
+# and for the proof. A WebAssembly build turns it off so the pure core, which does no
+# input or output, compiles for the browser where the host does the fetch.
+default = ["client"]
+client = []
+
+[dependencies]
+# The one implementation of keys, transactions, signing, encoding, and the identifier
+# format. The core reuses these rather than reimplementing any of them, since a second
+# implementation of the post quantum signing is a second chance to be wrong with a
+# user's money.
+qtv-account = { path = "../Quantova-Chain/crates/qtv-account" }
+qtv-tx = { path = "../Quantova-Chain/crates/qtv-tx" }
+qtv-codec = { path = "../Quantova-Chain/crates/qtv-codec" }
+qtv-idfmt = { path = "../Quantova-Chain/crates/qtv-idfmt" }

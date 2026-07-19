@@ -1,0 +1,43 @@
+# Quantova classical-crypto deny-list.
+#
+# POLICY-crypto.md (Quantova-Specs) is the supreme law; this file is its machine-readable form.
+# Enforced in EVERY repo except Q-Oracle. Run `cargo deny check` before every PR; CI runs it too.
+#
+# Classical cryptography is unrepresentable: these crates are banned anywhere in the dependency tree,
+# INCLUDING transitive and dev-dependencies. No workarounds, no test-only exceptions, no feature flags.
+
+[graph]
+all-features = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = [
+    "k256",
+    "ed25519-dalek",
+    "curve25519-dalek",
+    "p256",
+    "secp256k1",
+    "rsa",
+    "bls12_381",
+    "ark-ec",
+    "ark-bls12-381",
+    "ark-groth16",
+    "pairing",
+    "openssl",
+    "openssl-sys",
+]
+
+[advisories]
+version = 2
+yanked = "deny"
+unmaintained = "workspace"
+
+[licenses]
+version = 2
+allow = ["Apache-2.0", "MIT"]
+confidence-threshold = 0.9
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
