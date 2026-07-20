@@ -309,18 +309,25 @@ mod client {
             parse_transaction(&self.rpc("get_transaction", transaction_body(tx_id))?)
         }
 
-        /// Read node info for the fee, read the sender's nonce, sign the transfer, and submit
+        /// Read node info for the fee, read the sender's nonce, sign the transfer, and submit it.
         pub fn transfer(
             &self,
             seed: &[u8; SEED_LEN],
             index: u64,
             to: &str,
             amount: u64,
+            max_fee: u128,
         ) -> Result<(SignedTransfer, Submit), String> {
             if !valid_address(to) {
                 return Err("the recipient is not a q1 address".to_string());
             }
             let info = self.node_info()?;
+            if info.transfer_fee > max_fee {
+                return Err(format!(
+                    "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
+                    info.transfer_fee
+                ));
+            }
             let sender = account_address(seed, index);
             let account = self.account(&sender)?;
             let signed = sign_transfer(seed, index, to, amount, account.nonce, info.transfer_fee);
@@ -328,7 +335,7 @@ mod client {
             Ok((signed, outcome))
         }
 
-        /// Read the fee and the sender's nonce, sign a call to a target with the given meter
+        /// Read the fee and the sender's nonce, sign a call to a target with the given meter limit and
         pub fn call(
             &self,
             seed: &[u8; SEED_LEN],
@@ -336,8 +343,15 @@ mod client {
             target: &str,
             args: Vec<u8>,
             meter_limit: u64,
+            max_fee: u128,
         ) -> Result<(SignedTransfer, Submit), String> {
             let info = self.node_info()?;
+            if info.transfer_fee > max_fee {
+                return Err(format!(
+                    "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
+                    info.transfer_fee
+                ));
+            }
             let sender = account_address(seed, index);
             let account = self.account(&sender)?;
             let signed = sign_call(seed, index, target, args, account.nonce, meter_limit, info.transfer_fee);

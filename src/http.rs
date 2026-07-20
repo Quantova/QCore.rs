@@ -28,6 +28,16 @@ pub fn post(base: &str, path: &str, body: &str) -> Result<(u16, String), String>
         .map_err(|e| format!("resolve: {e}"))?
         .next()
         .ok_or("the host did not resolve")?;
+    // Refuse plaintext to anything but a loopback node. There is no TLS on this transport, so over an
+    // untrusted network a gateway's fee and nonce are unauthenticated and an attacker in the middle can
+    // rewrite them to drain the signer. A loopback node is the signer's own machine and is safe. Reach
+    // a remote gateway through a secure tunnel that terminates on loopback here.
+    if !addr.ip().is_loopback() {
+        return Err(format!(
+            "refusing plaintext to a non-loopback gateway ({host}); its fee and nonce would be \
+             unauthenticated and rewritable to drain funds, use a loopback node or a secure tunnel"
+        ));
+    }
     let mut stream = TcpStream::connect_timeout(&addr, TIMEOUT).map_err(|e| format!("connect: {e}"))?;
     stream.set_read_timeout(Some(TIMEOUT)).ok();
     stream.set_write_timeout(Some(TIMEOUT)).ok();

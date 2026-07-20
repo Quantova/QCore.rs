@@ -25,8 +25,10 @@ fn main() {
     let before = client.account(&sender).expect("account");
     println!("sender {} nonce {} balance {}", sender, before.nonce, before.balance);
 
+    // Accept a fee no higher than what node info reported, so a gateway cannot inflate it after the
+    // fact and drain the sender.
     let (signed, outcome) = client
-        .transfer(&SEED, 0, &recipient, 1000)
+        .transfer(&SEED, 0, &recipient, 1000, info.transfer_fee)
         .expect("transfer");
     match outcome {
         Submit::Accepted { state, tx_id } => println!("submitted {tx_id} accepted {state}"),
