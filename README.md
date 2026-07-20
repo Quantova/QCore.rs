@@ -68,6 +68,7 @@ does and never hand rolls a signature.
 qcore new                                             create a wallet, seed, phrase, and address
 qcore address <seed-hex> [index]                      the address for a seed and index
 qcore info <gateway-url>                              the chain id, height, and fee
+qcore register <gateway-url> <seed-hex>               register a funded account's key so it can send
 qcore balance <gateway-url> <address>                 an account balance and nonce
 qcore send <gateway-url> <seed-hex> <to> <amount> <max-fee>   sign and submit a transfer
 qcore status <gateway-url> <tx-id>                    where a transaction is
