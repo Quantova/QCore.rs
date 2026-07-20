@@ -1,7 +1,8 @@
 //! qcore, the terminal client for Quantova. It creates a wallet, reads the chain, and sends a
 
 use qcore::{
-    account_address, generate_seed, mnemonic_from_seed, valid_address, Client, Submit, TxStatus,
+    account_address, account_public_key, generate_seed, mnemonic_from_seed, valid_address, Client,
+    Submit, TxStatus,
 };
 
 fn main() {
@@ -19,6 +20,7 @@ fn run(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str).unwrap_or("help") {
         "new" => cmd_new(),
         "address" => cmd_address(&args[1..]),
+        "pubkey" => cmd_pubkey(&args[1..]),
         "info" => cmd_info(&args[1..]),
         "balance" => cmd_balance(&args[1..]),
         "send" => cmd_send(&args[1..]),
@@ -50,6 +52,16 @@ fn cmd_address(args: &[String]) -> Result<(), String> {
     let seed = parse_seed(args.first().ok_or("usage: qcore address <seed-hex> [index]")?)?;
     let index = parse_index(args.get(1))?;
     println!("{}", account_address(&seed, index));
+    Ok(())
+}
+
+/// The scheme, public key, and address of an account. An operator funding an account at genesis needs
+fn cmd_pubkey(args: &[String]) -> Result<(), String> {
+    let seed = parse_seed(args.first().ok_or("usage: qcore pubkey <seed-hex> [index]")?)?;
+    let index = parse_index(args.get(1))?;
+    println!("scheme  1");
+    println!("pubkey  {}", to_hex(&account_public_key(&seed, index)));
+    println!("address {}", account_address(&seed, index));
     Ok(())
 }
 
@@ -122,6 +134,7 @@ fn print_usage() {
     println!("usage");
     println!("  qcore new                                             create a wallet, seed, phrase, and address");
     println!("  qcore address <seed-hex> [index]                      the address for a seed and index");
+    println!("  qcore pubkey <seed-hex> [index]                       the scheme, public key, and address, for genesis");
     println!("  qcore info <gateway-url>                              the chain id, height, and fee");
     println!("  qcore balance <gateway-url> <address>                 an account balance and nonce");
     println!("  qcore send <gateway-url> <seed-hex> <to> <amount> <max-fee>   sign and submit a transfer");

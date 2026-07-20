@@ -21,6 +21,11 @@ pub fn account_address(seed: &[u8; SEED_LEN], index: u64) -> String {
     derive(seed, index).address()
 }
 
+/// The public key of an account under a master seed and an index, the module lattice key the address
+pub fn account_public_key(seed: &[u8; SEED_LEN], index: u64) -> Vec<u8> {
+    derive(seed, index).public_key().to_vec()
+}
+
 /// A signed transfer ready to submit: its canonical bytes, its id, and the sender it
 #[derive(Debug, Clone)]
 pub struct SignedTransfer {
