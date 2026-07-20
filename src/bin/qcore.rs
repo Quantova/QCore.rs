@@ -22,6 +22,7 @@ fn run(args: &[String]) -> Result<(), String> {
         "address" => cmd_address(&args[1..]),
         "pubkey" => cmd_pubkey(&args[1..]),
         "info" => cmd_info(&args[1..]),
+        "register" => cmd_register(&args[1..]),
         "balance" => cmd_balance(&args[1..]),
         "send" => cmd_send(&args[1..]),
         "status" => cmd_status(&args[1..]),
@@ -74,6 +75,27 @@ fn cmd_info(args: &[String]) -> Result<(), String> {
     println!("fee     {} {}", info.transfer_fee, info.denomination);
     println!("version {}", info.version);
     Ok(())
+}
+
+/// Register the account's public key on the chain, a one time step after an account is funded by a
+fn cmd_register(args: &[String]) -> Result<(), String> {
+    if args.len() < 2 {
+        return Err("usage: qcore register <gateway-url> <seed-hex>".to_string());
+    }
+    let seed = parse_seed(&args[1])?;
+    let client = Client::new(args[0].clone());
+    let info = client.node_info()?;
+    let (_signed, outcome) = client.register(&seed, 0, info.transfer_fee)?;
+    match outcome {
+        Submit::Accepted { state, tx_id } => {
+            println!("registered {tx_id}");
+            println!("state      {state}");
+            Ok(())
+        }
+        Submit::Rejected { reason, .. } => {
+            Err(format!("the node rejected the registration: {reason}"))
+        }
+    }
 }
 
 /// An account's balance and nonce, read from the chain.
@@ -136,6 +158,7 @@ fn print_usage() {
     println!("  qcore address <seed-hex> [index]                      the address for a seed and index");
     println!("  qcore pubkey <seed-hex> [index]                       the scheme, public key, and address, for genesis");
     println!("  qcore info <gateway-url>                              the chain id, height, and fee");
+    println!("  qcore register <gateway-url> <seed-hex>               register a funded account's key so it can send");
     println!("  qcore balance <gateway-url> <address>                 an account balance and nonce");
     println!("  qcore send <gateway-url> <seed-hex> <to> <amount> <max-fee>   sign and submit a transfer");
     println!("  qcore status <gateway-url> <tx-id>                    where a transaction is");

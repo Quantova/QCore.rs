@@ -26,6 +26,12 @@ pub fn account_public_key(seed: &[u8; SEED_LEN], index: u64) -> Vec<u8> {
     derive(seed, index).public_key().to_vec()
 }
 
+/// The reserved address an account registers its public key to. A fresh account funded by a transfer
+pub fn key_register_address() -> String {
+    qtv_idfmt::render_address(&qtv_crypto::sha3::sha3_256(b"qtv/key/register"))
+        .expect("a full hash reaches the address floor")
+}
+
 /// A signed transfer ready to submit: its canonical bytes, its id, and the sender it
 #[derive(Debug, Clone)]
 pub struct SignedTransfer {
@@ -67,6 +73,20 @@ pub fn sign_transfer(
     let mut encoder = Encoder::new();
     encoder.put_u64(amount);
     sign_call(seed, index, to, encoder.into_bytes(), nonce, NATIVE_TRANSFER_METER, fee)
+}
+
+/// Build and sign a key registration. The account's public key is the argument, the target is the
+pub fn sign_register(seed: &[u8; SEED_LEN], index: u64, nonce: u64, fee: u128) -> SignedTransfer {
+    let public_key = account_public_key(seed, index);
+    sign_call(
+        seed,
+        index,
+        &key_register_address(),
+        public_key,
+        nonce,
+        NATIVE_TRANSFER_METER,
+        fee,
+    )
 }
 
 // The wire encoders and decoders. A binding calls these so the host never builds a
@@ -384,6 +404,27 @@ mod client {
             let sender = account_address(seed, index);
             let account = self.account(&sender)?;
             let signed = sign_call(seed, index, target, args, account.nonce, meter_limit, info.transfer_fee);
+            let outcome = self.submit(&signed.tx_bytes)?;
+            Ok((signed, outcome))
+        }
+
+        /// Register this account's public key on the chain, so an account funded by a transfer, which
+        pub fn register(
+            &self,
+            seed: &[u8; SEED_LEN],
+            index: u64,
+            max_fee: u128,
+        ) -> Result<(SignedTransfer, Submit), String> {
+            let info = self.node_info()?;
+            if info.transfer_fee > max_fee {
+                return Err(format!(
+                    "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
+                    info.transfer_fee
+                ));
+            }
+            let sender = account_address(seed, index);
+            let account = self.account(&sender)?;
+            let signed = sign_register(seed, index, account.nonce, info.transfer_fee);
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome))
         }
