@@ -26,7 +26,7 @@ Quantova shares no wire, no address, and no unit with any other chain, and QCore
 
 ## Using it from Rust
 
-The client feature adds a small HTTP transport over the standard library for native callers and for proving the core against a running gateway. The example below reads the fee and the nonce, signs a transfer inside the core, and submits it.
+The client feature adds a small HTTP transport over the standard library for native callers and for proving the core against a running gateway. The example below reads the fee and the nonce, signs a transfer inside the core, and submits it. The caller passes the highest fee it will accept and the core refuses to sign a fee the gateway reports above it, so a gateway cannot inflate the fee and drain the account. Over this transport the client speaks plaintext only to a loopback node, since without transport security a gateway across an untrusted network could rewrite the fee and the nonce, so reach a remote gateway through a tunnel that ends on loopback.
 
 ```rust
 use qcore::{Client, account_address, TxStatus};
@@ -35,7 +35,8 @@ let client = Client::new("http://127.0.0.1:8645");
 let seed = [11u8; 32];
 let to = account_address(&seed, 1);
 
-let (signed, outcome) = client.transfer(&seed, 0, &to, 1000)?;
+let info = client.node_info()?;
+let (signed, outcome) = client.transfer(&seed, 0, &to, 1000, info.transfer_fee)?;
 let status = client.transaction(&signed.tx_id)?;
 ```
 
@@ -45,3 +46,7 @@ let status = client.transaction(&signed.tx_id)?;
 cargo build --features client
 cargo test --features client
 ```
+
+## Ownership and license
+
+QCore.rs is built and owned by Quantova Inc and is the reference core that QCore.js and QCore.py are generated over. It carries none of the industry stack and inherits nothing from it. Everything from the key derivation to the wire is Quantova's own. It is released under the Apache 2.0 and MIT licenses so any wallet, explorer, or service may build on it, and the copyright stays with Quantova Inc.
