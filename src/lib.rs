@@ -266,6 +266,27 @@ pub fn parse_transaction(response: &str) -> Result<TxStatus, String> {
     }
 }
 
+/// Generate a fresh thirty two byte master seed from the operating system's cryptographic random
+#[cfg(feature = "client")]
+pub fn generate_seed() -> Result<[u8; SEED_LEN], String> {
+    #[cfg(unix)]
+    {
+        use std::io::Read;
+        let mut file =
+            std::fs::File::open("/dev/urandom").map_err(|e| format!("open the random source: {e}"))?;
+        let mut seed = [0u8; SEED_LEN];
+        file.read_exact(&mut seed)
+            .map_err(|e| format!("read the random source: {e}"))?;
+        Ok(seed)
+    }
+    #[cfg(not(unix))]
+    {
+        Err("generate_seed reads /dev/urandom and runs on unix only, so on another platform draw \
+             thirty two bytes from the platform cryptographic random source and pass them in"
+            .to_string())
+    }
+}
+
 /// The native client under the `client` feature.
 #[cfg(feature = "client")]
 pub use client::Client;
@@ -345,6 +366,9 @@ mod client {
             meter_limit: u64,
             max_fee: u128,
         ) -> Result<(SignedTransfer, Submit), String> {
+            if !valid_address(target) {
+                return Err("the target is not a q1 address".to_string());
+            }
             let info = self.node_info()?;
             if info.transfer_fee > max_fee {
                 return Err(format!(

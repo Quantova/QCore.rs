@@ -24,6 +24,17 @@ Quantova is post quantum from the ground. There is no elliptic curve anywhere in
 
 Quantova shares no wire, no address, and no unit with any other chain, and QCore speaks only Quantova. The address is a q1 Bech32m string over a full post quantum key, never a hex twenty byte address and never an SS58 string. Money is counted in Quon, the smallest unit, at one million Quon to one QTOV, and it always crosses the wire as a decimal string so a JavaScript number never rounds a balance. The wire is the Quantova gateway, an HTTP POST to a named method under a version prefix with a flat JSON body, not Ethereum JSON RPC and not a Substrate WebSocket. The transaction encoding is Quantova's own canonical codec, not RLP and not SCALE. The signatures come from Q Crypto, Quantova's own implementation of the lattice and hash standards written from scratch, not a borrowed crate. QCore does not translate to or from any older format because there is nothing older to translate.
 
+## Creating a wallet
+
+Under the client feature the core generates a fresh master seed from the operating system random
+source, so a wallet creates a new key with one call. The recovery phrase is the only backup and stays
+on the device.
+
+```rust
+let seed = qcore::generate_seed()?;
+let phrase = qcore::mnemonic_from_seed(&seed);
+```
+
 ## Using it from Rust
 
 The client feature adds a small HTTP transport over the standard library for native callers and for proving the core against a running gateway. The example below reads the fee and the nonce, signs a transfer inside the core, and submits it. The caller passes the highest fee it will accept and the core refuses to sign a fee the gateway reports above it, so a gateway cannot inflate the fee and drain the account. Over this transport the client speaks plaintext only to a loopback node, since without transport security a gateway across an untrusted network could rewrite the fee and the nonce, so reach a remote gateway through a tunnel that ends on loopback.
