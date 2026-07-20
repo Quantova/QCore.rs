@@ -58,6 +58,21 @@ cargo build --features client
 cargo test --features client
 ```
 
+## Terminal client
+
+The client feature also builds a small terminal client, qcore, over the same core, so a person can
+create a wallet, read the chain, and send a transfer from the shell. It signs exactly as a wallet
+does and never hand rolls a signature.
+
+```
+qcore new                                             create a wallet, seed, phrase, and address
+qcore address <seed-hex> [index]                      the address for a seed and index
+qcore info <gateway-url>                              the chain id, height, and fee
+qcore balance <gateway-url> <address>                 an account balance and nonce
+qcore send <gateway-url> <seed-hex> <to> <amount> <max-fee>   sign and submit a transfer
+qcore status <gateway-url> <tx-id>                    where a transaction is
+```
+
 ## Ownership and license
 
 QCore.rs is built and owned by Quantova Inc and is the reference core that QCore.js and QCore.py are generated over. It carries none of the industry stack and inherits nothing from it. Everything from the key derivation to the wire is Quantova's own. It is released under the Apache 2.0 and MIT licenses so any wallet, explorer, or service may build on it, and the copyright stays with Quantova Inc.

@@ -15,6 +15,13 @@ categories = ["cryptography", "cryptography::cryptocurrencies"]
 default = ["client"]
 client = []
 
+# The terminal client. It builds only with the client feature, since it reads and writes over the
+# HTTP transport, so a WebAssembly build never pulls it in.
+[[bin]]
+name = "qcore"
+path = "src/bin/qcore.rs"
+required-features = ["client"]
+
 [dependencies]
 # The one implementation of keys, transactions, signing, encoding, and the identifier
 # format. The core reuses these rather than reimplementing any of them, since a second
