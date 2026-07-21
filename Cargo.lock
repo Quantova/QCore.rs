@@ -11,6 +11,7 @@ dependencies = [
  "qtv-crypto",
  "qtv-idfmt",
  "qtv-tx",
+ "qtv-vm",
 ]
 
 [[package]]
@@ -42,4 +43,11 @@ dependencies = [
  "qtv-codec",
  "qtv-crypto",
  "qtv-idfmt",
+]
+
+[[package]]
+name = "qtv-vm"
+version = "0.2.0"
+dependencies = [
+ "qtv-crypto",
 ]

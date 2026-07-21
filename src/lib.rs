@@ -1,5 +1,6 @@
 //! The Quantova client core.
 
+pub mod contract;
 pub mod json;
 
 #[cfg(feature = "client")]
@@ -425,6 +426,79 @@ mod client {
             let signed = sign_call(seed, index, target, args, account.nonce, meter_limit, info.transfer_fee);
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome))
+        }
+
+        /// The whole storage of a contract, its slot to word map, read so a client can inspect a
+        pub fn storage(&self, contract: &str) -> Result<Vec<contract::StorageSlot>, String> {
+            contract::parse_storage(&self.rpc("get_storage", contract::storage_body(contract))?)
+        }
+
+        /// The events a block at a height recorded, in emission order, so a client can confirm a call
+        pub fn events(&self, height: u64) -> Result<Vec<contract::ContractEvent>, String> {
+            contract::parse_events(&self.rpc("get_events", contract::events_body(height))?)
+        }
+
+        /// The current per signer nonce a `signed by owner` order must carry, read from the contract's
+        pub fn contract_nonce(&self, contract: &str, signer: &[u8; 32]) -> Result<u64, String> {
+            let key = crate::contract::nonce_slot_key(signer);
+            Ok(crate::contract::storage_value(&self.storage(contract)?, &key))
+        }
+
+        /// The word at a scalar state field slot of a contract, read by its thirty two byte scalar key,
+        pub fn contract_scalar(&self, contract: &str, slot: u64) -> Result<u64, String> {
+            let key = crate::contract::scalar_slot_key(slot);
+            Ok(crate::contract::storage_value(&self.storage(contract)?, &key))
+        }
+
+        /// Build, sign, and submit a `signed by owner` order call. The caller seed and index sign and
+        #[allow(clippy::too_many_arguments)]
+        pub fn call_signed_order(
+            &self,
+            caller_seed: &[u8; SEED_LEN],
+            caller_index: u64,
+            contract: &str,
+            selector: [u8; 4],
+            layout: &contract::OrderLayout,
+            fields: &[u64],
+            owner_seed: &[u8; SEED_LEN],
+            owner_index: u64,
+            meter_limit: u64,
+            max_fee: u128,
+        ) -> Result<(SignedTransfer, Submit, contract::SignedOrderCall), String> {
+            if !valid_address(contract) {
+                return Err("the contract is not a q1 address".to_string());
+            }
+            let signer = contract::order_signer(owner_seed, owner_index);
+            let nonce = self.contract_nonce(contract, &signer)?;
+            let order = contract::build_signed_order_call(
+                contract,
+                selector,
+                layout,
+                fields,
+                owner_seed,
+                owner_index,
+                nonce,
+            )?;
+            let info = self.node_info()?;
+            if info.transfer_fee > max_fee {
+                return Err(format!(
+                    "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
+                    info.transfer_fee
+                ));
+            }
+            let caller = account_address(caller_seed, caller_index);
+            let account = self.account(&caller)?;
+            let signed = sign_call(
+                caller_seed,
+                caller_index,
+                contract,
+                order.call_args.clone(),
+                account.nonce,
+                meter_limit,
+                info.transfer_fee,
+            );
+            let outcome = self.submit(&signed.tx_bytes)?;
+            Ok((signed, outcome, order))
         }
 
         /// Register this account's public key on the chain, so an account funded by a transfer, which
