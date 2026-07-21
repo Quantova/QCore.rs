@@ -29,6 +29,12 @@ const MSG_FIELDS_OFF: usize = 88;
 /// A default byte offset in scratch memory for the verify region, the public key then signature then
 pub const DEFAULT_REGION_OFFSET: u64 = 8192;
 
+/// Marks deploy arguments as carrying deploy parameters after the container. The node's own tag.
+const DEPLOY_PARAMS_TAG: &[u8; 8] = b"QDEPLOY1";
+
+/// Closes the deploy parameter region. The compiler's own sentinel.
+const GENESIS_PARAM_SENTINEL: &[u8; 8] = b"QGENSNTL";
+
 /// The signer address the chain, the machine's ADDR opcode, and a contract's signed prologue all
 pub fn signer_address(scheme: u8, public_key: &[u8]) -> [u8; 32] {
     let mut input = Vec::with_capacity(1 + public_key.len());
@@ -65,15 +71,45 @@ pub fn map_slot_key(map_domain_tag: u64, key_address: &[u8; 32]) -> [u8; 32] {
     sha3::sha3_256(&input)
 }
 
-/// The canonical order message a `signed by owner` order commits to, rebuilt byte for byte the way the
-pub fn canonical_order_message(
+/// A committed order field or call argument: a machine word or a full address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FieldValue {
+    Word(u64),
+    Address([u8; 32]),
+}
+
+impl FieldValue {
+    fn bytes(&self) -> Vec<u8> {
+        match self {
+            FieldValue::Word(w) => w.to_be_bytes().to_vec(),
+            FieldValue::Address(a) => a.to_vec(),
+        }
+    }
+
+    fn width(&self) -> u64 {
+        match self {
+            FieldValue::Word(_) => WORD,
+            FieldValue::Address(_) => 32,
+        }
+    }
+}
+
+/// An argument value and the scratch offset it is placed at. Order fields are listed in the message's
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldArg {
+    pub offset: u64,
+    pub value: FieldValue,
+}
+
+/// The canonical order message: the domain tag, the contract, the selector word, the signer, the
+pub fn canonical_order_message_typed(
     contract_id: &[u8; 32],
     selector: [u8; 4],
     signer: &[u8; 32],
     nonce: u64,
-    fields: &[u64],
+    fields: &[FieldValue],
 ) -> Vec<u8> {
-    let mut msg = Vec::with_capacity(MSG_FIELDS_OFF + fields.len() * WORD as usize);
+    let mut msg = Vec::with_capacity(MSG_FIELDS_OFF);
     debug_assert_eq!(msg.len(), MSG_TAG_OFF);
     msg.extend_from_slice(SIGNED_MSG_TAG);
     debug_assert_eq!(msg.len(), MSG_CONTRACT_OFF);
@@ -86,9 +122,21 @@ pub fn canonical_order_message(
     msg.extend_from_slice(&nonce.to_be_bytes());
     debug_assert_eq!(msg.len(), MSG_FIELDS_OFF);
     for field in fields {
-        msg.extend_from_slice(&field.to_be_bytes());
+        msg.extend_from_slice(&field.bytes());
     }
     msg
+}
+
+/// The word only case of [`canonical_order_message_typed`].
+pub fn canonical_order_message(
+    contract_id: &[u8; 32],
+    selector: [u8; 4],
+    signer: &[u8; 32],
+    nonce: u64,
+    fields: &[u64],
+) -> Vec<u8> {
+    let typed: Vec<FieldValue> = fields.iter().copied().map(FieldValue::Word).collect();
+    canonical_order_message_typed(contract_id, selector, signer, nonce, &typed)
 }
 
 /// The argument layout of one `signed by owner` entry, read from the compiler's emit output. The scheme
@@ -152,10 +200,43 @@ pub fn build_signed_order_call(
             layout.field_offs.len()
         ));
     }
+    let typed: Vec<FieldArg> = layout
+        .field_offs
+        .iter()
+        .zip(fields)
+        .map(|(off, value)| FieldArg {
+            offset: *off,
+            value: FieldValue::Word(*value),
+        })
+        .collect();
+    build_typed_order_call(
+        contract,
+        selector,
+        layout.scheme_off,
+        layout.ptr_off,
+        layout.region_off,
+        &typed,
+        owner_seed,
+        owner_index,
+        nonce,
+    )
+}
+
+/// The general form of [`build_signed_order_call`], whose order fields may be full addresses as well as
+#[allow(clippy::too_many_arguments)]
+pub fn build_typed_order_call(
+    contract: &str,
+    selector: [u8; 4],
+    scheme_off: u64,
+    ptr_off: u64,
+    region_off: u64,
+    fields: &[FieldArg],
+    owner_seed: &[u8; crate::SEED_LEN],
+    owner_index: u64,
+    nonce: u64,
+) -> Result<SignedOrderCall, String> {
     let contract_id = contract_id(contract)?;
 
-    // Derive the owner's module lattice key, its public key at the region start and its secret to sign
-    // with. The expanded secret is derived here and dropped when this returns.
     let seed = account_seed(owner_seed, SCHEME_LATTICE, owner_index);
     let (public_key, secret) = ml_dsa::keygen(&seed);
     debug_assert_eq!(
@@ -165,11 +246,9 @@ pub fn build_signed_order_call(
     );
 
     let signer = signer_address(SCHEME_LATTICE, &public_key);
-    let message = canonical_order_message(&contract_id, selector, &signer, nonce, fields);
+    let values: Vec<FieldValue> = fields.iter().map(|f| f.value.clone()).collect();
+    let message = canonical_order_message_typed(&contract_id, selector, &signer, nonce, &values);
 
-    // Sign the rebuilt message under an empty context, the way the machine's ML-DSA verify opcode
-    // checks it. Any valid signature over these bytes verifies, so the fixed randomness only fixes the
-    // bytes, not the acceptance.
     let signature = ml_dsa::sign(&secret, &message, &[], &[0u8; 32])
         .ok_or("signing the order message failed")?;
     debug_assert_eq!(
@@ -178,37 +257,30 @@ pub fn build_signed_order_call(
         "the signature length must be the machine's module lattice signature length"
     );
 
-    // The verify region: the public key, then the signature, then the message. The contract rebuilds
-    // the message in place over these same bytes before it verifies, so it must fit inside the region
-    // and inside scratch, which the region offset and the machine's scratch size guarantee.
-    let region_off = usize::try_from(layout.region_off).map_err(|_| "the region offset is too large")?;
+    let region_start = usize::try_from(region_off).map_err(|_| "the region offset is too large")?;
     let region_len = public_key.len() + signature.len() + message.len();
-    let region_end = region_off
+    let region_end = region_start
         .checked_add(region_len)
         .ok_or("the verify region overflows the address space")?;
 
-    // The argument memory spans the trusted context, the argument words, and the verify region. It is
-    // sized to hold the whole region, which for a module lattice order sits far above the words.
-    let last_word_end = layout
-        .field_offs
+    let last_word_end = fields
         .iter()
-        .copied()
-        .chain([layout.scheme_off, layout.ptr_off])
-        .map(|off| off + WORD)
+        .map(|f| f.offset + f.value.width())
+        .chain([scheme_off + WORD, ptr_off + WORD])
         .max()
         .unwrap_or(CONTRACT_CONTEXT_BYTES);
     let mem_len = region_end.max(usize::try_from(last_word_end).unwrap_or(usize::MAX));
     let mut user_memory = vec![0u8; mem_len];
 
-    put_word(&mut user_memory, layout.scheme_off, u64::from(SCHEME_LATTICE))?;
-    put_word(&mut user_memory, layout.ptr_off, layout.region_off)?;
-    for (off, value) in layout.field_offs.iter().zip(fields) {
-        put_word(&mut user_memory, *off, *value)?;
+    put_word(&mut user_memory, scheme_off, u64::from(SCHEME_LATTICE))?;
+    put_word(&mut user_memory, ptr_off, region_off)?;
+    for field in fields {
+        put_bytes(&mut user_memory, field.offset, &field.value.bytes())?;
     }
 
-    let pk_end = region_off + public_key.len();
+    let pk_end = region_start + public_key.len();
     let sig_end = pk_end + signature.len();
-    user_memory[region_off..pk_end].copy_from_slice(&public_key);
+    user_memory[region_start..pk_end].copy_from_slice(&public_key);
     user_memory[pk_end..sig_end].copy_from_slice(&signature);
     user_memory[sig_end..region_end].copy_from_slice(&message);
 
@@ -225,6 +297,72 @@ pub fn build_signed_order_call(
         signer,
         nonce,
     })
+}
+
+/// A plain call's arguments: the selector then the argument memory, the context left for the node.
+pub fn build_call_args(selector: [u8; 4], args: &[FieldArg]) -> Result<Vec<u8>, String> {
+    let mem_len = args
+        .iter()
+        .map(|f| f.offset + f.value.width())
+        .max()
+        .unwrap_or(CONTRACT_CONTEXT_BYTES)
+        .max(CONTRACT_CONTEXT_BYTES);
+    let mut user_memory = vec![0u8; usize::try_from(mem_len).map_err(|_| "an argument offset is too large")?];
+    for field in args {
+        put_bytes(&mut user_memory, field.offset, &field.value.bytes())?;
+    }
+    let mut call_args = Vec::with_capacity(selector.len() + user_memory.len());
+    call_args.extend_from_slice(&selector);
+    call_args.extend_from_slice(&user_memory);
+    Ok(call_args)
+}
+
+/// A deploy parameter value, matching the widths the compiler assigns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeployParam {
+    Address([u8; 32]),
+    U64(u64),
+    U128(u128),
+    Guardians(Vec<[u8; 32]>),
+}
+
+impl DeployParam {
+    fn bytes(&self) -> Vec<u8> {
+        match self {
+            DeployParam::Address(a) => a.to_vec(),
+            DeployParam::U64(v) => v.to_be_bytes().to_vec(),
+            DeployParam::U128(v) => {
+                let mut out = Vec::with_capacity(16);
+                out.extend_from_slice(&(*v as u64).to_be_bytes());
+                out.extend_from_slice(&((*v >> 64) as u64).to_be_bytes());
+                out
+            }
+            DeployParam::Guardians(gs) => {
+                let mut out = Vec::with_capacity(gs.len() * 32);
+                for g in gs {
+                    out.extend_from_slice(g);
+                }
+                out
+            }
+        }
+    }
+}
+
+/// Frame deploy arguments: the tag, the container length, the container, then the parameters closed by
+pub fn build_deploy_call(container: &[u8], params: &[DeployParam]) -> Vec<u8> {
+    let mut region = Vec::new();
+    for param in params {
+        region.extend_from_slice(&param.bytes());
+    }
+    if !params.is_empty() {
+        region.extend_from_slice(GENESIS_PARAM_SENTINEL);
+    }
+    let mut out = Vec::with_capacity(DEPLOY_PARAMS_TAG.len() + 4 + container.len() + region.len());
+    out.extend_from_slice(DEPLOY_PARAMS_TAG);
+    out.extend_from_slice(&(container.len() as u32).to_be_bytes());
+    out.extend_from_slice(container);
+    out.extend_from_slice(&region);
+    out
 }
 
 /// The raw thirty two byte payload of a q1 contract address, the bytes the trusted context injects as
@@ -244,6 +382,17 @@ fn put_word(memory: &mut [u8], offset: u64, value: u64) -> Result<(), String> {
         .get_mut(start..end)
         .ok_or("an argument word runs off the end of the argument memory")?
         .copy_from_slice(&value.to_be_bytes());
+    Ok(())
+}
+
+/// Write a byte run into scratch memory at a byte offset.
+fn put_bytes(memory: &mut [u8], offset: u64, bytes: &[u8]) -> Result<(), String> {
+    let start = usize::try_from(offset).map_err(|_| "an argument offset is too large")?;
+    let end = start.checked_add(bytes.len()).ok_or("an argument value overflows scratch")?;
+    memory
+        .get_mut(start..end)
+        .ok_or("an argument value runs off the end of the argument memory")?
+        .copy_from_slice(bytes);
     Ok(())
 }
 
@@ -479,5 +628,128 @@ mod tests {
 
     fn word_at(memory: &[u8], off: usize) -> u64 {
         u64::from_be_bytes(memory[off..off + 8].try_into().unwrap())
+    }
+
+    // The QAsset mint layout from `quanta-cli emit examples/QAsset.qs`: order.to at 72 as a full address,
+    // order#scheme at 104, order#ptr at 112, order.amount at 120. The message commits order.amount then
+    // order.to, the compiler's first appearance order.
+    const MINT_SELECTOR: [u8; 4] = [0x3e, 0xcc, 0xb9, 0xbc];
+
+    #[test]
+    fn a_typed_order_binds_a_word_and_a_whole_address_field() {
+        let seed = [4u8; crate::SEED_LEN];
+        let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
+        let to = [0xABu8; 32];
+        let fields = vec![
+            FieldArg { offset: 120, value: FieldValue::Word(500) },
+            FieldArg { offset: 72, value: FieldValue::Address(to) },
+        ];
+        let order = build_typed_order_call(&contract, MINT_SELECTOR, 104, 112, DEFAULT_REGION_OFFSET, &fields, &seed, 0, 0).unwrap();
+
+        // The message is tag, contract, selector, signer, nonce, then the amount word and the whole
+        // recipient address: eighty eight bytes of header plus one word plus one address.
+        assert_eq!(order.message.len(), 88 + 8 + 32);
+        assert_eq!(&order.message[88..96], &500u64.to_be_bytes());
+        assert_eq!(&order.message[96..128], &to);
+
+        // The amount word lands at its offset and the whole address at its offset, and the scheme and
+        // pointer words carry the module lattice scheme and the region offset.
+        assert_eq!(word_at(&order.user_memory, 120), 500);
+        assert_eq!(&order.user_memory[72..104], &to);
+        assert_eq!(word_at(&order.user_memory, 104), u64::from(SCHEME_LATTICE));
+        assert_eq!(word_at(&order.user_memory, 112), DEFAULT_REGION_OFFSET);
+
+        // The owner's signature verifies over the message, the exact check the machine's verify runs.
+        assert!(ml_dsa::verify(
+            order.public_key.as_slice().try_into().unwrap(),
+            &order.message,
+            order.signature.as_slice().try_into().unwrap(),
+            &[],
+        ));
+    }
+
+    #[test]
+    fn the_word_only_builder_matches_the_typed_core() {
+        let seed = [8u8; crate::SEED_LEN];
+        let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
+        let layout = counter_layout();
+        let word = build_signed_order_call(&contract, BUMP_SELECTOR, &layout, &[7], &seed, 0, 3).unwrap();
+        let typed = build_typed_order_call(
+            &contract,
+            BUMP_SELECTOR,
+            layout.scheme_off,
+            layout.ptr_off,
+            layout.region_off,
+            &[FieldArg { offset: 88, value: FieldValue::Word(7) }],
+            &seed,
+            0,
+            3,
+        )
+        .unwrap();
+        assert_eq!(word.call_args, typed.call_args);
+        assert_eq!(word.message, typed.message);
+    }
+
+    #[test]
+    fn build_call_args_places_typed_fields_and_leaves_the_context_zero() {
+        // The QAsset transfer layout: to at 72 as a full address, amount at 104.
+        let to = [0x2Cu8; 32];
+        let selector = [0xb8, 0x4d, 0xbd, 0x2c];
+        let args = build_call_args(
+            selector,
+            &[
+                FieldArg { offset: 72, value: FieldValue::Address(to) },
+                FieldArg { offset: 104, value: FieldValue::Word(200) },
+            ],
+        )
+        .unwrap();
+        assert_eq!(&args[..4], &selector);
+        let mem = &args[4..];
+        assert!(mem[..CONTRACT_CONTEXT_BYTES as usize].iter().all(|&b| b == 0), "context left for the node");
+        assert_eq!(&mem[72..104], &to);
+        assert_eq!(word_at(mem, 104), 200);
+    }
+
+    #[test]
+    fn a_deploy_call_frames_the_container_and_the_params_with_a_sentinel() {
+        let container = b"QVM1 the whole container bytes".to_vec();
+        let owner = [0x55u8; 32];
+        let supply: u128 = (7u128 << 64) | 0x1234;
+        let args = build_deploy_call(
+            &container,
+            &[DeployParam::Address(owner), DeployParam::U128(supply)],
+        );
+        // The frame: the tag, the container length, the container, then the parameter region.
+        assert_eq!(&args[..8], DEPLOY_PARAMS_TAG);
+        assert_eq!(u32::from_be_bytes(args[8..12].try_into().unwrap()) as usize, container.len());
+        let cstart = 12;
+        let cend = cstart + container.len();
+        assert_eq!(&args[cstart..cend], &container[..]);
+        // The parameter region: the owner address, the supply low then high word, then the sentinel.
+        let region = &args[cend..];
+        assert_eq!(&region[..32], &owner);
+        assert_eq!(&region[32..40], &(supply as u64).to_be_bytes());
+        assert_eq!(&region[40..48], &((supply >> 64) as u64).to_be_bytes());
+        assert_eq!(&region[48..56], GENESIS_PARAM_SENTINEL);
+        assert_eq!(region.len(), 56);
+    }
+
+    #[test]
+    fn a_paramless_deploy_carries_no_sentinel() {
+        let container = b"QVM1 body".to_vec();
+        let args = build_deploy_call(&container, &[]);
+        // Just the tag, the length, and the container, with an empty parameter region.
+        assert_eq!(args.len(), 8 + 4 + container.len());
+    }
+
+    #[test]
+    fn a_guardian_set_deploy_param_lays_out_its_addresses_inline() {
+        let gs = vec![[0x11u8; 32], [0x22u8; 32], [0x33u8; 32]];
+        let args = build_deploy_call(b"QVM1", &[DeployParam::Guardians(gs.clone())]);
+        let region = &args[8 + 4 + 4..];
+        for (j, g) in gs.iter().enumerate() {
+            assert_eq!(&region[j * 32..j * 32 + 32], g);
+        }
+        assert_eq!(&region[96..104], GENESIS_PARAM_SENTINEL);
     }
 }

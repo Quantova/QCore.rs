@@ -501,6 +501,100 @@ mod client {
             Ok((signed, outcome, order))
         }
 
+        /// The general form of [`Client::call_signed_order`], whose order fields may include full
+        #[allow(clippy::too_many_arguments)]
+        pub fn call_typed_order(
+            &self,
+            caller_seed: &[u8; SEED_LEN],
+            caller_index: u64,
+            contract: &str,
+            selector: [u8; 4],
+            scheme_off: u64,
+            ptr_off: u64,
+            region_off: u64,
+            fields: &[contract::FieldArg],
+            owner_seed: &[u8; SEED_LEN],
+            owner_index: u64,
+            meter_limit: u64,
+            max_fee: u128,
+        ) -> Result<(SignedTransfer, Submit, contract::SignedOrderCall), String> {
+            if !valid_address(contract) {
+                return Err("the contract is not a q1 address".to_string());
+            }
+            let signer = contract::order_signer(owner_seed, owner_index);
+            let nonce = self.contract_nonce(contract, &signer)?;
+            let order = contract::build_typed_order_call(
+                contract, selector, scheme_off, ptr_off, region_off, fields, owner_seed, owner_index,
+                nonce,
+            )?;
+            let info = self.node_info()?;
+            if info.transfer_fee > max_fee {
+                return Err(format!(
+                    "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
+                    info.transfer_fee
+                ));
+            }
+            let caller = account_address(caller_seed, caller_index);
+            let account = self.account(&caller)?;
+            let signed = sign_call(
+                caller_seed,
+                caller_index,
+                contract,
+                order.call_args.clone(),
+                account.nonce,
+                meter_limit,
+                info.transfer_fee,
+            );
+            let outcome = self.submit(&signed.tx_bytes)?;
+            Ok((signed, outcome, order))
+        }
+
+        /// Deploy a container with typed deploy parameters, returning the address it lands at.
+        pub fn deploy_with_params(
+            &self,
+            seed: &[u8; SEED_LEN],
+            index: u64,
+            container: &[u8],
+            params: &[contract::DeployParam],
+            meter_limit: u64,
+            max_fee: u128,
+        ) -> Result<(SignedTransfer, Submit, String), String> {
+            let info = self.node_info()?;
+            if info.transfer_fee > max_fee {
+                return Err(format!(
+                    "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
+                    info.transfer_fee
+                ));
+            }
+            let deployer = account_address(seed, index);
+            let account = self.account(&deployer)?;
+            let args = contract::build_deploy_call(container, params);
+            let contract = contract_address(&deployer, account.nonce)
+                .ok_or("the deployer is not a q1 address")?;
+            let signed = sign_call(
+                seed,
+                index,
+                &vm_deploy_address(),
+                args,
+                account.nonce,
+                meter_limit,
+                info.transfer_fee,
+            );
+            let outcome = self.submit(&signed.tx_bytes)?;
+            Ok((signed, outcome, contract))
+        }
+
+        /// The word at a keyed map entry, by the map's domain tag and the whole key address.
+        pub fn contract_map(
+            &self,
+            contract: &str,
+            map_domain_tag: u64,
+            key: &[u8; 32],
+        ) -> Result<u64, String> {
+            let slot = crate::contract::map_slot_key(map_domain_tag, key);
+            Ok(crate::contract::storage_value(&self.storage(contract)?, &slot))
+        }
+
         /// Register this account's public key on the chain, so an account funded by a transfer, which
         pub fn register(
             &self,
