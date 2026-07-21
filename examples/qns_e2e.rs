@@ -1,11 +1,11 @@
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use qcore::contract::{DeployParam, FieldArg, FieldValue};
+use qcore::contract::{storage_value, DeployParam, FieldArg, FieldValue};
 use qcore::{account_address, Client, Submit, TxStatus};
 
-const DEPLOYER_SEED: [u8; 32] = [11u8; 32];
-const HOLDER2_SEED: [u8; 32] = [33u8; 32];
+const OWNER_A_SEED: [u8; 32] = [11u8; 32];
+const OWNER_B_SEED: [u8; 32] = [33u8; 32];
 const STRANGER_SEED: [u8; 32] = [22u8; 32];
 
 const REGISTER_SELECTOR: [u8; 4] = [0x48, 0xe0, 0x4e, 0xf3];
@@ -34,7 +34,7 @@ const RENEWAL_FEE_SLOT: u64 = 5;
 const VAULT_SLOT: u64 = 6;
 const REGISTERED_BASE: u64 = 1 << 40;
 const EXPIRY_BASE: u64 = (1 << 40) + (1 << 32);
-const OWNERS_BASE: u64 = (1 << 40) + (2 << 32);
+const OWNER_OF_BASE: u64 = (1 << 40) + (2 << 32);
 const RESOLVED_BASE: u64 = (1 << 40) + (3 << 32);
 
 const YEAR_SECONDS: u64 = 31_536_000;
@@ -63,31 +63,34 @@ fn run() -> Result<(), String> {
     let fee = info.transfer_fee;
     println!("network {} at height {}, fee {} {}", info.chain_id, info.head_height, fee, info.denomination);
 
-    let q1 = account_address(&DEPLOYER_SEED, 0);
-    let q2 = account_address(&HOLDER2_SEED, 0);
+    let a = account_address(&OWNER_A_SEED, 0);
+    let b = account_address(&OWNER_B_SEED, 0);
     let stranger = account_address(&STRANGER_SEED, 0);
-    let q1_id = address_payload(&q1)?;
-    let q2_id = address_payload(&q2)?;
+    let a_id = address_payload(&a)?;
+    let b_id = address_payload(&b)?;
     let stranger_id = address_payload(&stranger)?;
 
     let jeff = name_key("Jeff.Q")?;
     let mike = name_key("Mike.Q")?;
+    let bob = name_key("Bob.Q")?;
 
-    let account = client.account(&q1)?;
-    println!("admin/owner Q1 {q1}");
-    println!("  nonce {} balance {} has_key {}", account.nonce, account.balance, account.has_key);
-    println!("second owner Q2 {q2}");
+    println!("admin/owner A  {a}");
+    println!("owner B        {b}");
     println!("non owner      {stranger}");
-    if !account.has_key {
-        return Err("Q1 is not a funded keyed genesis account, it cannot sign".into());
+    for (label, addr) in [("A", &a), ("B", &b)] {
+        let account = client.account(addr)?;
+        println!("  {label} nonce {} balance {} has_key {}", account.nonce, account.balance, account.has_key);
+        if !account.has_key {
+            return Err(format!("{label} is not a funded keyed genesis account, it cannot sign"));
+        }
     }
 
     let container = from_hex(std::fs::read_to_string(&container_file).map_err(|e| format!("reading {container_file}: {e}"))?.trim())?;
     let (deploy_tx, deploy_out, contract) = client.deploy_with_params(
-        &DEPLOYER_SEED,
+        &OWNER_A_SEED,
         0,
         &container,
-        &[DeployParam::Address(q1_id), DeployParam::U64(PURCHASE_FEE), DeployParam::U64(RENEWAL_FEE)],
+        &[DeployParam::Address(a_id), DeployParam::U64(PURCHASE_FEE), DeployParam::U64(RENEWAL_FEE)],
         METER,
         fee,
     )?;
@@ -98,16 +101,16 @@ fn run() -> Result<(), String> {
     if client.storage(&contract)?.is_empty() {
         return Err("the contract deployed no storage, the genesis constructor did not run".into());
     }
-    for (i, want) in q1_id.chunks(8).enumerate() {
+    for (i, want) in a_id.chunks(8).enumerate() {
         let got = client.contract_scalar(&contract, i as u64)?;
         if got != u64::from_be_bytes(want.try_into().unwrap()) {
-            return Err(format!("admin slot {i} is {got}, not Q1"));
+            return Err(format!("admin slot {i} is {got}, not A"));
         }
     }
     let purchase0 = client.contract_scalar(&contract, PURCHASE_FEE_SLOT)?;
     let renewal0 = client.contract_scalar(&contract, RENEWAL_FEE_SLOT)?;
     let vault0 = client.contract_scalar(&contract, VAULT_SLOT)?;
-    println!("[deploy] admin is Q1, purchase_fee {purchase0}, renewal_fee {renewal0}, vault {vault0}");
+    println!("[deploy] admin is A, purchase_fee {purchase0}, renewal_fee {renewal0}, vault {vault0}");
     if purchase0 != PURCHASE_FEE || renewal0 != RENEWAL_FEE || vault0 != 0 {
         return Err("the deploy parameters did not land in state".into());
     }
@@ -118,134 +121,210 @@ fn run() -> Result<(), String> {
 
     let until = now_seconds() + YEAR_SECONDS;
 
-    let jeff_height = register(&client, &DEPLOYER_SEED, &contract, jeff, until, fee, "Jeff.Q", "Q1")?;
-    let reg_owner = client.contract_map(&contract, OWNERS_BASE, &q1_id)?;
+    // Jeff.Q and Mike.Q register to A, Bob.Q registers to B, so B is itself a registered owner.
+    let jeff_height = register(&client, &OWNER_A_SEED, &contract, jeff, until, fee, "Jeff.Q", "A")?;
+    assert_owner(&client, &contract, jeff, &a_id, "Jeff.Q owned by A in full")?;
     let reg_taken = client.contract_map(&contract, REGISTERED_BASE, &jeff)?;
     let reg_expiry = client.contract_map(&contract, EXPIRY_BASE, &jeff)?;
-    println!("[register Jeff.Q] registered {reg_taken}, owner Q1 {reg_owner}, expiry {reg_expiry}");
-    if reg_taken != 1 || reg_owner != 1 || reg_expiry != until {
-        return Err("Jeff.Q did not register to Q1 with its expiry".into());
+    if reg_taken != 1 || reg_expiry != until {
+        return Err("Jeff.Q did not register with its expiry".into());
     }
     let registered_evt = find_event(&client, &contract, REGISTERED_SELECTOR, jeff_height)?.ok_or("no Registered event")?;
-    if word_at(&registered_evt, 2)? != until {
-        return Err("the Registered event carried the wrong expiry".into());
+    if addr_at(&registered_evt, 32)? != a_id {
+        return Err("the Registered event did not carry the whole owner address".into());
+    }
+    if word_at(&registered_evt, 8)? != until {
+        return Err("the Registered event carried the wrong expiry after the two full addresses".into());
     }
     fees_taken += PURCHASE_FEE;
-    let vault_after_jeff = client.contract_scalar(&contract, VAULT_SLOT)?;
-    println!("[register Jeff.Q] vault {vault0} -> {vault_after_jeff}, Registered event expiry {until}");
     conservation(&client, &contract, fees_taken, swept, "after Jeff.Q register")?;
 
-    let _ = register(&client, &DEPLOYER_SEED, &contract, mike, until, fee, "Mike.Q", "Q1")?;
+    let _ = register(&client, &OWNER_A_SEED, &contract, mike, until, fee, "Mike.Q", "A")?;
+    assert_owner(&client, &contract, mike, &a_id, "Mike.Q owned by A in full")?;
     fees_taken += PURCHASE_FEE;
-    let vault_after_mike = client.contract_scalar(&contract, VAULT_SLOT)?;
-    println!("[register Mike.Q] vault {vault_after_jeff} -> {vault_after_mike}, both names owned by Q1");
     conservation(&client, &contract, fees_taken, swept, "after Mike.Q register")?;
+
+    let _ = register(&client, &OWNER_B_SEED, &contract, bob, until, fee, "Bob.Q", "B")?;
+    assert_owner(&client, &contract, bob, &b_id, "Bob.Q owned by B in full")?;
+    fees_taken += PURCHASE_FEE;
+    println!("[register Bob.Q] B is now a registered owner of its own name");
+    conservation(&client, &contract, fees_taken, swept, "after Bob.Q register")?;
 
     let years = 2u64;
     let renew_args = qcore::contract::build_call_args(
         RENEW_SELECTOR,
         &[
-            FieldArg { offset: NAME_OFF, value: FieldValue::Address(jeff) },
+            FieldArg { offset: NAME_OFF, value: FieldValue::Address(mike) },
             FieldArg { offset: YEARS_OFF, value: FieldValue::Word(years) },
         ],
     )?;
-    let (renew_tx, renew_out) = client.call(&DEPLOYER_SEED, 0, &contract, renew_args, METER, fee)?;
+    let (renew_tx, renew_out) = client.call(&OWNER_A_SEED, 0, &contract, renew_args, METER, fee)?;
     accepted(&renew_out, "renew")?;
     let renew_height = poll_finality(&client, &renew_tx.tx_id)?;
-    let expiry_renewed = client.contract_map(&contract, EXPIRY_BASE, &jeff)?;
+    let expiry_renewed = client.contract_map(&contract, EXPIRY_BASE, &mike)?;
     let expect_expiry = until + years * YEAR_SECONDS;
-    println!("\n[renew Jeff.Q] {years} years, expiry {reg_expiry} -> {expiry_renewed}");
+    println!("\n[renew Mike.Q] {years} years, expiry {until} -> {expiry_renewed}");
     if expiry_renewed != expect_expiry {
         return Err(format!("renew did not extend expiry to {expect_expiry}, got {expiry_renewed}"));
     }
     let renewed_evt = find_event(&client, &contract, RENEWED_SELECTOR, renew_height)?.ok_or("no Renewed event")?;
-    if word_at(&renewed_evt, 1)? != years {
-        return Err("the Renewed event carried the wrong term".into());
+    if word_at(&renewed_evt, 4)? != years {
+        return Err("the Renewed event carried the wrong term after the full name".into());
     }
     fees_taken += RENEWAL_FEE * years;
-    let vault_after_renew = client.contract_scalar(&contract, VAULT_SLOT)?;
-    println!("[renew Jeff.Q] vault {vault_after_mike} -> {vault_after_renew}");
-    conservation(&client, &contract, fees_taken, swept, "after Jeff.Q renew")?;
+    conservation(&client, &contract, fees_taken, swept, "after Mike.Q renew")?;
 
-    let resolved_before = client.contract_map(&contract, RESOLVED_BASE, &mike)?;
+    // The core proof: A resolves Mike.Q to a full target address, and all four resolution words read
+    // back reassemble to the whole thirty two byte target, no truncation.
+    let target = b_id;
     let resolve_args = qcore::contract::build_call_args(
         SET_RESOLVED_SELECTOR,
         &[
             FieldArg { offset: NAME_OFF, value: FieldValue::Address(mike) },
-            FieldArg { offset: TARGET_OFF, value: FieldValue::Address(q2_id) },
+            FieldArg { offset: TARGET_OFF, value: FieldValue::Address(target) },
         ],
     )?;
-    let (resolve_tx, resolve_out) = client.call(&DEPLOYER_SEED, 0, &contract, resolve_args, METER, fee)?;
+    let (resolve_tx, resolve_out) = client.call(&OWNER_A_SEED, 0, &contract, resolve_args, METER, fee)?;
     accepted(&resolve_out, "set_resolved")?;
     let resolve_height = poll_finality(&client, &resolve_tx.tx_id)?;
-    let resolved_after = client.contract_map(&contract, RESOLVED_BASE, &mike)?;
-    let target_word = u64::from_be_bytes(q2_id[0..8].try_into().unwrap());
-    println!("\n[set_resolved Mike.Q] resolved {resolved_before} -> {resolved_after}, target Q2");
-    if resolved_after != target_word {
-        return Err("Mike.Q did not resolve to Q2".into());
+    let slots = client.storage(&contract)?;
+    println!("\n[set_resolved Mike.Q] owner A resolves Mike.Q to a full target");
+    let mut reassembled = [0u8; 32];
+    for i in 0..4u64 {
+        let key = addr_word_key(RESOLVED_BASE, &mike, i);
+        let word = storage_value(&slots, &key);
+        reassembled[i as usize * 8..i as usize * 8 + 8].copy_from_slice(&word.to_be_bytes());
+        println!("  resolution word {i}: slot {} = {:016x}", hex(&key), word);
     }
-    find_event(&client, &contract, RESOLVED_SELECTOR, resolve_height)?.ok_or("no Resolved event")?;
+    if reassembled != target {
+        return Err(format!(
+            "the reassembled resolution {} does not equal the full target {}",
+            hex(&reassembled),
+            hex(&target)
+        ));
+    }
+    let resolved_evt = find_event(&client, &contract, RESOLVED_SELECTOR, resolve_height)?.ok_or("no Resolved event")?;
+    if addr_at(&resolved_evt, 64)? != target {
+        return Err("the Resolved event did not carry the whole target address".into());
+    }
     conservation(&client, &contract, fees_taken, swept, "after set_resolved")?;
-    println!("[set_resolved Mike.Q] PROOF: owner Q1 set the resolved target, Resolved event recorded");
+    println!("[set_resolved Mike.Q] PROOF: all thirty two bytes of the target resolve back in full");
 
-    let owner_q2_before = client.contract_map(&contract, OWNERS_BASE, &q2_id)?;
+    println!("\n--- security ---");
+
+    // Negative 1: B is a registered owner of Bob.Q, but does not own Mike.Q or Jeff.Q, so neither a
+    // resolve of Mike.Q nor a transfer of Jeff.Q by B is accepted.
+    let b_resolve = qcore::contract::build_call_args(
+        SET_RESOLVED_SELECTOR,
+        &[
+            FieldArg { offset: NAME_OFF, value: FieldValue::Address(mike) },
+            FieldArg { offset: TARGET_OFF, value: FieldValue::Address(stranger_id) },
+        ],
+    )?;
+    let (br_tx, br_out) = client.call(&OWNER_B_SEED, 0, &contract, b_resolve, METER, fee)?;
+    accepted(&br_out, "B set_resolved of a name it does not own")?;
+    let br_height = poll_finality(&client, &br_tx.tx_id)?;
+    let mike_resolved = read_addr_value(&client, &contract, RESOLVED_BASE, &mike)?;
+    if mike_resolved != target || find_event(&client, &contract, RESOLVED_SELECTOR, br_height)?.is_some() {
+        return Err("a registered owner set_resolved a name it does not own".into());
+    }
+    println!("[neg1a] B could not set_resolved Mike.Q (owned by A): reverted, resolution unchanged, no event");
+
+    let b_transfer = qcore::contract::build_call_args(
+        TRANSFER_SELECTOR,
+        &[
+            FieldArg { offset: NAME_OFF, value: FieldValue::Address(jeff) },
+            FieldArg { offset: TO_OFF, value: FieldValue::Address(b_id) },
+        ],
+    )?;
+    let (bt_tx, bt_out) = client.call(&OWNER_B_SEED, 0, &contract, b_transfer, METER, fee)?;
+    accepted(&bt_out, "B transfer of a name it does not own")?;
+    let bt_height = poll_finality(&client, &bt_tx.tx_id)?;
+    if read_addr_value(&client, &contract, OWNER_OF_BASE, &jeff)? != a_id
+        || find_event(&client, &contract, TRANSFERRED_SELECTOR, bt_height)?.is_some()
+    {
+        return Err("a registered owner transferred a name it does not own".into());
+    }
+    println!("[neg1b] B could not transfer Jeff.Q (owned by A): reverted, owner still A, no event");
+    println!("[neg1 ] PROOF: per name ownership binds the full owner, a different registered owner is refused");
+    conservation(&client, &contract, fees_taken, swept, "after B's refused attempts")?;
+
+    // A transfers Jeff.Q to B, cleanly moving ownership.
     let transfer_args = qcore::contract::build_call_args(
         TRANSFER_SELECTOR,
         &[
             FieldArg { offset: NAME_OFF, value: FieldValue::Address(jeff) },
-            FieldArg { offset: TO_OFF, value: FieldValue::Address(q2_id) },
+            FieldArg { offset: TO_OFF, value: FieldValue::Address(b_id) },
         ],
     )?;
-    let (transfer_tx, transfer_out) = client.call(&DEPLOYER_SEED, 0, &contract, transfer_args, METER, fee)?;
+    let (transfer_tx, transfer_out) = client.call(&OWNER_A_SEED, 0, &contract, transfer_args, METER, fee)?;
     accepted(&transfer_out, "transfer")?;
     let transfer_height = poll_finality(&client, &transfer_tx.tx_id)?;
-    let owner_q2_after = client.contract_map(&contract, OWNERS_BASE, &q2_id)?;
-    println!("\n[transfer Jeff.Q] owner Q2 {owner_q2_before} -> {owner_q2_after}");
-    if owner_q2_after != 1 {
-        return Err("transfer did not make Q2 an owner".into());
+    assert_owner(&client, &contract, jeff, &b_id, "Jeff.Q owned by B in full")?;
+    let transferred_evt = find_event(&client, &contract, TRANSFERRED_SELECTOR, transfer_height)?.ok_or("no Transferred event")?;
+    if addr_at(&transferred_evt, 32)? != a_id || addr_at(&transferred_evt, 64)? != b_id {
+        return Err("the Transferred event did not carry the whole prior and new owner".into());
     }
-    find_event(&client, &contract, TRANSFERRED_SELECTOR, transfer_height)?.ok_or("no Transferred event")?;
+    println!("\n[transfer Jeff.Q] A -> B, owner_of[Jeff.Q] now reads B in full, event carries both owners");
     conservation(&client, &contract, fees_taken, swept, "after transfer")?;
-    println!("[transfer Jeff.Q] PROOF: ownership moved to Q2, Transferred event recorded");
 
-    println!("\n--- security ---");
-
-    let bad_resolve = qcore::contract::build_call_args(
+    // Negative 2: the prior owner A can no longer act on Jeff.Q, the new owner B can.
+    let a_resolve_jeff = qcore::contract::build_call_args(
         SET_RESOLVED_SELECTOR,
         &[
             FieldArg { offset: NAME_OFF, value: FieldValue::Address(jeff) },
-            FieldArg { offset: TARGET_OFF, value: FieldValue::Address(stranger_id) },
+            FieldArg { offset: TARGET_OFF, value: FieldValue::Address(a_id) },
         ],
     )?;
-    let (bad_r_tx, bad_r_out) = client.call(&STRANGER_SEED, 0, &contract, bad_resolve, METER, fee)?;
-    accepted(&bad_r_out, "non owner set_resolved")?;
-    let bad_r_height = poll_finality(&client, &bad_r_tx.tx_id)?;
-    let resolved_jeff = client.contract_map(&contract, RESOLVED_BASE, &jeff)?;
-    println!("\n[non owner set_resolved] a non owner tried to set Jeff.Q, height {bad_r_height}");
-    if resolved_jeff != 0 || find_event(&client, &contract, RESOLVED_SELECTOR, bad_r_height)?.is_some() {
-        return Err("a non owner set the resolved target, the owner guard failed".into());
+    let (arj_tx, arj_out) = client.call(&OWNER_A_SEED, 0, &contract, a_resolve_jeff, METER, fee)?;
+    accepted(&arj_out, "prior owner set_resolved")?;
+    let arj_height = poll_finality(&client, &arj_tx.tx_id)?;
+    if read_addr_value(&client, &contract, RESOLVED_BASE, &jeff)? != [0u8; 32]
+        || find_event(&client, &contract, RESOLVED_SELECTOR, arj_height)?.is_some()
+    {
+        return Err("the prior owner A set_resolved a transferred name".into());
     }
-    println!("[non owner set_resolved] PROOF: refused, Jeff.Q resolved still {resolved_jeff} and no event");
+    println!("\n[neg2a] prior owner A could not set_resolved Jeff.Q after transfer: reverted, no event");
 
-    let bad_transfer = qcore::contract::build_call_args(
+    let a_transfer_jeff = qcore::contract::build_call_args(
         TRANSFER_SELECTOR,
         &[
             FieldArg { offset: NAME_OFF, value: FieldValue::Address(jeff) },
-            FieldArg { offset: TO_OFF, value: FieldValue::Address(stranger_id) },
+            FieldArg { offset: TO_OFF, value: FieldValue::Address(a_id) },
         ],
     )?;
-    let (bad_t_tx, bad_t_out) = client.call(&STRANGER_SEED, 0, &contract, bad_transfer, METER, fee)?;
-    accepted(&bad_t_out, "non owner transfer")?;
-    let bad_t_height = poll_finality(&client, &bad_t_tx.tx_id)?;
-    let owner_stranger = client.contract_map(&contract, OWNERS_BASE, &stranger_id)?;
-    println!("[non owner transfer] a non owner tried to transfer Jeff.Q, height {bad_t_height}");
-    if owner_stranger != 0 || find_event(&client, &contract, TRANSFERRED_SELECTOR, bad_t_height)?.is_some() {
-        return Err("a non owner transferred a name, the owner guard failed".into());
+    let (atj_tx, atj_out) = client.call(&OWNER_A_SEED, 0, &contract, a_transfer_jeff, METER, fee)?;
+    accepted(&atj_out, "prior owner transfer")?;
+    let atj_height = poll_finality(&client, &atj_tx.tx_id)?;
+    if read_addr_value(&client, &contract, OWNER_OF_BASE, &jeff)? != b_id
+        || find_event(&client, &contract, TRANSFERRED_SELECTOR, atj_height)?.is_some()
+    {
+        return Err("the prior owner A transferred a name it no longer owns".into());
     }
-    println!("[non owner transfer] PROOF: refused, the non owner is still not an owner and no event");
+    println!("[neg2b] prior owner A could not transfer Jeff.Q after transfer: reverted, owner still B, no event");
 
-    let taken_before = client.contract_map(&contract, REGISTERED_BASE, &jeff)?;
+    let target2 = stranger_id;
+    let b_resolve_jeff = qcore::contract::build_call_args(
+        SET_RESOLVED_SELECTOR,
+        &[
+            FieldArg { offset: NAME_OFF, value: FieldValue::Address(jeff) },
+            FieldArg { offset: TARGET_OFF, value: FieldValue::Address(target2) },
+        ],
+    )?;
+    let (brj_tx, brj_out) = client.call(&OWNER_B_SEED, 0, &contract, b_resolve_jeff, METER, fee)?;
+    accepted(&brj_out, "new owner set_resolved")?;
+    let brj_height = poll_finality(&client, &brj_tx.tx_id)?;
+    if read_addr_value(&client, &contract, RESOLVED_BASE, &jeff)? != target2 {
+        return Err("the new owner B could not set_resolved Jeff.Q".into());
+    }
+    find_event(&client, &contract, RESOLVED_SELECTOR, brj_height)?.ok_or("no Resolved event for the new owner")?;
+    println!("[neg2c] new owner B set_resolved Jeff.Q to a full target and it reassembles in full");
+    println!("[neg2 ] PROOF: transfer moved the binding, the prior owner is gone and the new owner holds it");
+    conservation(&client, &contract, fees_taken, swept, "after ownership move proofs")?;
+
+    // Negative 3: an unexpired name cannot be re-registered, the trusted time after gate refuses it.
     let expiry_before = client.contract_map(&contract, EXPIRY_BASE, &jeff)?;
+    let owner_before = read_addr_value(&client, &contract, OWNER_OF_BASE, &jeff)?;
     let vault_before_retake = client.contract_scalar(&contract, VAULT_SLOT)?;
     let retake = qcore::contract::build_call_args(
         REGISTER_SELECTOR,
@@ -257,21 +336,17 @@ fn run() -> Result<(), String> {
     let (retake_tx, retake_out) = client.call(&STRANGER_SEED, 0, &contract, retake, METER, fee)?;
     accepted(&retake_out, "retake")?;
     let retake_height = poll_finality(&client, &retake_tx.tx_id)?;
-    let expiry_after = client.contract_map(&contract, EXPIRY_BASE, &jeff)?;
-    let owner_stranger2 = client.contract_map(&contract, OWNERS_BASE, &stranger_id)?;
-    let vault_after_retake = client.contract_scalar(&contract, VAULT_SLOT)?;
-    println!("\n[retake Jeff.Q] a stranger tried to register an unexpired Jeff.Q, height {retake_height}");
-    if expiry_after != expiry_before || owner_stranger2 != 0 || vault_after_retake != vault_before_retake
+    if client.contract_map(&contract, EXPIRY_BASE, &jeff)? != expiry_before
+        || read_addr_value(&client, &contract, OWNER_OF_BASE, &jeff)? != owner_before
+        || client.contract_scalar(&contract, VAULT_SLOT)? != vault_before_retake
         || find_event(&client, &contract, REGISTERED_SELECTOR, retake_height)?.is_some()
     {
-        return Err("an unexpired name was re-registered, the expiry guard failed".into());
+        return Err("an unexpired name was re-registered, the after gate failed".into());
     }
-    println!("[retake Jeff.Q] PROOF: refused, expiry unchanged at {expiry_after}, no fee taken, no event");
-    if taken_before != 1 {
-        return Err("Jeff.Q registration was lost".into());
-    }
+    println!("\n[neg3 ] PROOF: an unexpired Jeff.Q could not be re-registered, expiry and owner unchanged, no fee, no event");
     conservation(&client, &contract, fees_taken, swept, "after refused retake")?;
 
+    // Negative 4: a non admin cannot sweep, the signed by admin binding refuses the stranger's own order.
     let vault_before_bad_sweep = client.contract_scalar(&contract, VAULT_SLOT)?;
     let (bad_w_tx, bad_w_out, bad_w_order) = client.call_typed_order(
         &STRANGER_SEED,
@@ -289,17 +364,18 @@ fn run() -> Result<(), String> {
     )?;
     accepted(&bad_w_out, "non admin withdraw")?;
     let bad_w_height = poll_finality(&client, &bad_w_tx.tx_id)?;
-    let vault_after_bad_sweep = client.contract_scalar(&contract, VAULT_SLOT)?;
-    println!("\n[non admin withdraw] a non admin signed a sweep, signer {}, height {bad_w_height}", hex(&bad_w_order.signer));
-    if vault_after_bad_sweep != vault_before_bad_sweep || find_event(&client, &contract, SWEPT_SELECTOR, bad_w_height)?.is_some() {
+    if client.contract_scalar(&contract, VAULT_SLOT)? != vault_before_bad_sweep
+        || find_event(&client, &contract, SWEPT_SELECTOR, bad_w_height)?.is_some()
+    {
         return Err("a non admin swept the vault, the admin binding failed".into());
     }
-    println!("[non admin withdraw] PROOF: refused, vault unchanged at {vault_after_bad_sweep} and no event");
+    println!("\n[neg4 ] PROOF: a non admin sweep signed by {} was refused, vault unchanged, no event", hex(&bad_w_order.signer));
     conservation(&client, &contract, fees_taken, swept, "after refused withdraw")?;
 
+    // The admin sweeps the whole vault to zero.
     let sweep = client.contract_scalar(&contract, VAULT_SLOT)?;
     let (w_tx, w_out, w_order) = client.call_typed_order(
-        &DEPLOYER_SEED,
+        &OWNER_A_SEED,
         0,
         &contract,
         WITHDRAW_SELECTOR,
@@ -307,7 +383,7 @@ fn run() -> Result<(), String> {
         WITHDRAW_PTR_OFF,
         REGION_OFF,
         &[FieldArg { offset: WITHDRAW_AMOUNT_OFF, value: FieldValue::Word(sweep) }],
-        &DEPLOYER_SEED,
+        &OWNER_A_SEED,
         0,
         METER,
         fee,
@@ -364,6 +440,33 @@ fn conservation(client: &Client, contract: &str, fees_taken: u64, swept: u64, at
     Ok(())
 }
 
+/// The thirty two byte storage key of word `word` of an address valued map entry: SHA3 of the map's
+fn addr_word_key(base: u64, key: &[u8; 32], word: u64) -> [u8; 32] {
+    let mut input = base.to_be_bytes().to_vec();
+    input.extend_from_slice(key);
+    input.extend_from_slice(&word.to_be_bytes());
+    qtv_crypto::sha3::sha3_256(&input)
+}
+
+fn read_addr_value(client: &Client, contract: &str, base: u64, key: &[u8; 32]) -> Result<[u8; 32], String> {
+    let slots = client.storage(contract)?;
+    let mut out = [0u8; 32];
+    for i in 0..4u64 {
+        let word = storage_value(&slots, &addr_word_key(base, key, i));
+        out[i as usize * 8..i as usize * 8 + 8].copy_from_slice(&word.to_be_bytes());
+    }
+    Ok(out)
+}
+
+fn assert_owner(client: &Client, contract: &str, name: [u8; 32], want: &[u8; 32], what: &str) -> Result<(), String> {
+    let got = read_addr_value(client, contract, OWNER_OF_BASE, &name)?;
+    if &got != want {
+        return Err(format!("{what}: owner_of reads {} not {}", hex(&got), hex(want)));
+    }
+    println!("    [owner] {what}: {}", hex(&got));
+    Ok(())
+}
+
 fn name_key(name: &str) -> Result<[u8; 32], String> {
     if !name.ends_with(".Q") {
         return Err(format!("a domain must end with .Q, got {name}"));
@@ -380,6 +483,12 @@ fn word_at(data: &[u8], word_index: usize) -> Result<u64, String> {
     data.get(start..start + 8)
         .ok_or("the event payload is shorter than its word".to_string())
         .map(|b| u64::from_be_bytes(b.try_into().unwrap()))
+}
+
+fn addr_at(data: &[u8], byte_off: usize) -> Result<[u8; 32], String> {
+    data.get(byte_off..byte_off + 32)
+        .ok_or("the event payload is shorter than a full address".to_string())
+        .map(|b| b.try_into().unwrap())
 }
 
 fn address_payload(address: &str) -> Result<[u8; 32], String> {
