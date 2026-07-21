@@ -1,6 +1,3 @@
-//! A small JSON reader and writer, so the core carries no outside dependency and a
-
-/// A JSON value the writer renders and the reader parses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Json {
     Null,
@@ -56,8 +53,6 @@ impl Json {
 
     pub fn get(&self, key: &str) -> Option<&Json> {
         match self {
-            // The last value wins when a key repeats, which is what a browser and Python
-            // JSON reader do, so a response cannot be read one way here and another there.
             Json::Object(fields) => fields.iter().rev().find(|(k, _)| k == key).map(|(_, v)| v),
             _ => None,
         }
@@ -117,7 +112,7 @@ fn write_string(s: &str, out: &mut String) {
     out.push('"');
 }
 
-/// The deepest a response may nest. A gateway reply nests a handful of levels at most, so
+// limits recursion against hostile input
 const MAX_DEPTH: usize = 128;
 
 pub fn parse(input: &str) -> Result<Json, String> {
@@ -173,7 +168,6 @@ impl Parser {
         }
     }
 
-    /// Parse one nested value, an object or an array, counting the depth so a hostile reply
     fn nested(&mut self, parse: fn(&mut Parser) -> Result<Json, String>) -> Result<Json, String> {
         self.depth += 1;
         if self.depth > MAX_DEPTH {
@@ -259,7 +253,6 @@ impl Parser {
         }
     }
 
-    /// Read one four digit hex escape into its code unit.
     fn hex4(&mut self) -> Result<u32, String> {
         let mut code = 0u32;
         for _ in 0..4 {
@@ -272,7 +265,6 @@ impl Parser {
         Ok(code)
     }
 
-    /// Read a `\u` escape into a character, joining a surrogate pair when one is present, so a
     fn unicode_char(&mut self) -> Result<char, String> {
         let hi = self.hex4()?;
         if (0xD800..=0xDBFF).contains(&hi) {
@@ -366,8 +358,6 @@ fn nibble(c: u8) -> Result<u8, String> {
         b'0'..=b'9' => Ok(c - b'0'),
         b'a'..=b'f' => Ok(c - b'a' + 10),
         b'A'..=b'F' => Ok(c - b'A' + 10),
-        // The offending character is not echoed, since this same decoder reads a seed and
-        // an error must not carry a piece of a secret.
         _ => Err("the value has a non hex character".to_string()),
     }
 }

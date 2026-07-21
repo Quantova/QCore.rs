@@ -1,5 +1,3 @@
-//! Prove the core against a running gateway. Read node info, read the sender's account,
-
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -25,8 +23,6 @@ fn main() {
     let before = client.account(&sender).expect("account");
     println!("sender {} nonce {} balance {}", sender, before.nonce, before.balance);
 
-    // Accept a fee no higher than what node info reported, so a gateway cannot inflate it after the
-    // fact and drain the sender.
     let (signed, outcome) = client
         .transfer(&SEED, 0, &recipient, 1000, info.transfer_fee)
         .expect("transfer");

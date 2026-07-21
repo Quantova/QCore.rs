@@ -1,5 +1,3 @@
-//! The Quantova client core.
-
 pub mod contract;
 pub mod json;
 
@@ -11,35 +9,28 @@ use qtv_account::derive;
 use qtv_codec::{to_bytes, Encoder};
 use qtv_tx::{sign, Body, Call};
 
-/// The length of a master seed in bytes.
 pub const SEED_LEN: usize = 32;
 
-/// The meter limit a native transfer needs. The fixed transfer program spends this
 pub const NATIVE_TRANSFER_METER: u64 = 1_210;
 
-/// The derived address of an account under a master seed and an index, the same
 pub fn account_address(seed: &[u8; SEED_LEN], index: u64) -> String {
     derive(seed, index).address()
 }
 
-/// The public key of an account under a master seed and an index, the module lattice key the address
 pub fn account_public_key(seed: &[u8; SEED_LEN], index: u64) -> Vec<u8> {
     derive(seed, index).public_key().to_vec()
 }
 
-/// The reserved address an account registers its public key to. A fresh account funded by a transfer
 pub fn key_register_address() -> String {
     qtv_idfmt::render_address(&qtv_crypto::sha3::sha3_256(b"qtv/key/register"))
         .expect("a full hash reaches the address floor")
 }
 
-/// The reserved address a contract deploy targets. A call to this address carrying a compiled
 pub fn vm_deploy_address() -> String {
     qtv_idfmt::render_address(&qtv_crypto::sha3::sha3_256(b"qtv/vm/deploy"))
         .expect("a full hash reaches the address floor")
 }
 
-/// The address a deploy from a deployer at a nonce lands the contract at, a pure function of the
 pub fn contract_address(deployer: &str, nonce: u64) -> Option<String> {
     let payload = qtv_idfmt::parse_address(deployer).ok()?;
     if payload.len() != 32 {
@@ -52,7 +43,6 @@ pub fn contract_address(deployer: &str, nonce: u64) -> Option<String> {
     qtv_idfmt::render_address(&qtv_crypto::sha3::sha3_256(&input)).ok()
 }
 
-/// A signed transfer ready to submit: its canonical bytes, its id, and the sender it
 #[derive(Debug, Clone)]
 pub struct SignedTransfer {
     pub from: String,
@@ -60,7 +50,6 @@ pub struct SignedTransfer {
     pub tx_bytes: Vec<u8>,
 }
 
-/// Build and sign a call to a target with its arguments already encoded. A native transfer
 pub fn sign_call(
     seed: &[u8; SEED_LEN],
     index: u64,
@@ -81,7 +70,6 @@ pub fn sign_call(
     }
 }
 
-/// Build and sign a native transfer. The amount is encoded into the call the way the node
 pub fn sign_transfer(
     seed: &[u8; SEED_LEN],
     index: u64,
@@ -95,7 +83,6 @@ pub fn sign_transfer(
     sign_call(seed, index, to, encoder.into_bytes(), nonce, NATIVE_TRANSFER_METER, fee)
 }
 
-/// Build and sign a key registration. The account's public key is the argument, the target is the
 pub fn sign_register(seed: &[u8; SEED_LEN], index: u64, nonce: u64, fee: u128) -> SignedTransfer {
     let public_key = account_public_key(seed, index);
     sign_call(
@@ -109,30 +96,22 @@ pub fn sign_register(seed: &[u8; SEED_LEN], index: u64, nonce: u64, fee: u128) -
     )
 }
 
-// The wire encoders and decoders. A binding calls these so the host never builds a
-// request body or reads a response field by name.
-
-/// The request body for submit, the transaction as hex.
 pub fn submit_body(tx_bytes: &[u8]) -> String {
     object(vec![("tx", Json::str(to_hex(tx_bytes)))]).render()
 }
 
-/// The request body for get account.
 pub fn account_body(address: &str) -> String {
     object(vec![("address", Json::str(address))]).render()
 }
 
-/// The request body for get transaction.
 pub fn transaction_body(tx_id: &str) -> String {
     object(vec![("tx_id", Json::str(tx_id))]).render()
 }
 
-/// The request body for get block by height.
 pub fn block_by_height_body(height: u64) -> String {
     object(vec![("height", Json::Int(height))]).render()
 }
 
-/// What node info reports.
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
     pub chain_id: String,
@@ -143,7 +122,6 @@ pub struct NodeInfo {
     pub version: String,
 }
 
-/// An account's on chain record.
 #[derive(Debug, Clone)]
 pub struct Account {
     pub address: String,
@@ -153,14 +131,12 @@ pub struct Account {
     pub has_key: bool,
 }
 
-/// The outcome of a submission.
 #[derive(Debug, Clone)]
 pub enum Submit {
     Accepted { state: String, tx_id: String },
     Rejected { reason: String, expected: Option<u64>, got: Option<u64> },
 }
 
-/// Where a transaction is in its life.
 #[derive(Debug, Clone)]
 pub enum TxStatus {
     Finalised { height: u64, block: String },
@@ -192,17 +168,14 @@ fn field_u8(v: &Json, key: &str) -> Result<u8, String> {
     u8::try_from(n).map_err(|_| format!("the {key} field is out of range for a byte"))
 }
 
-/// Whether an address parses as a Quantova q1 address. A caller checks a recipient or a
 pub fn valid_address(address: &str) -> bool {
     qtv_idfmt::parse_address(address).is_ok()
 }
 
-/// The standard English word list, one word per line.
 fn word_list() -> Vec<&'static str> {
     include_str!("english.txt").lines().collect()
 }
 
-/// The recovery phrase for a master seed. The phrase carries the thirty two seed bytes and an
 pub fn mnemonic_from_seed(seed: &[u8; SEED_LEN]) -> String {
     let words = word_list();
     let checksum = qtv_crypto::sha3::sha3_256(seed)[0];
@@ -224,7 +197,6 @@ pub fn mnemonic_from_seed(seed: &[u8; SEED_LEN]) -> String {
         .join(" ")
 }
 
-/// The master seed a recovery phrase carries, or an error if the phrase is the wrong length, has
 pub fn seed_from_mnemonic(phrase: &str) -> Result<[u8; SEED_LEN], String> {
     let words = word_list();
     let entered: Vec<&str> = phrase.split_whitespace().collect();
@@ -254,7 +226,6 @@ pub fn seed_from_mnemonic(phrase: &str) -> Result<[u8; SEED_LEN], String> {
     Ok(seed)
 }
 
-/// Parse a node info response.
 pub fn parse_node_info(response: &str) -> Result<NodeInfo, String> {
     let v = json::parse(response)?;
     let fee = v.get("fee").ok_or("no fee in node info")?;
@@ -268,7 +239,6 @@ pub fn parse_node_info(response: &str) -> Result<NodeInfo, String> {
     })
 }
 
-/// Parse an account response.
 pub fn parse_account(response: &str) -> Result<Account, String> {
     let v = json::parse(response)?;
     Ok(Account {
@@ -280,7 +250,6 @@ pub fn parse_account(response: &str) -> Result<Account, String> {
     })
 }
 
-/// Parse a submit response.
 pub fn parse_submit(response: &str) -> Result<Submit, String> {
     let v = json::parse(response)?;
     match field_str(&v, "verdict")?.as_str() {
@@ -297,7 +266,6 @@ pub fn parse_submit(response: &str) -> Result<Submit, String> {
     }
 }
 
-/// Parse a get transaction response.
 pub fn parse_transaction(response: &str) -> Result<TxStatus, String> {
     let v = json::parse(response)?;
     match field_str(&v, "status")?.as_str() {
@@ -311,7 +279,6 @@ pub fn parse_transaction(response: &str) -> Result<TxStatus, String> {
     }
 }
 
-/// Generate a fresh thirty two byte master seed from the operating system's cryptographic random
 #[cfg(feature = "client")]
 pub fn generate_seed() -> Result<[u8; SEED_LEN], String> {
     #[cfg(unix)]
@@ -332,7 +299,6 @@ pub fn generate_seed() -> Result<[u8; SEED_LEN], String> {
     }
 }
 
-/// The native client under the `client` feature.
 #[cfg(feature = "client")]
 pub use client::Client;
 
@@ -340,7 +306,6 @@ pub use client::Client;
 mod client {
     use super::*;
 
-    /// A client bound to a gateway base url, `http://host:port`.
     pub struct Client {
         base: String,
     }
@@ -375,7 +340,6 @@ mod client {
             parse_transaction(&self.rpc("get_transaction", transaction_body(tx_id))?)
         }
 
-        /// Read node info for the fee, read the sender's nonce, sign the transfer, and submit it.
         pub fn transfer(
             &self,
             seed: &[u8; SEED_LEN],
@@ -401,7 +365,6 @@ mod client {
             Ok((signed, outcome))
         }
 
-        /// Read the fee and the sender's nonce, sign a call to a target with the given meter limit and
         pub fn call(
             &self,
             seed: &[u8; SEED_LEN],
@@ -428,29 +391,24 @@ mod client {
             Ok((signed, outcome))
         }
 
-        /// The whole storage of a contract, its slot to word map, read so a client can inspect a
         pub fn storage(&self, contract: &str) -> Result<Vec<contract::StorageSlot>, String> {
             contract::parse_storage(&self.rpc("get_storage", contract::storage_body(contract))?)
         }
 
-        /// The events a block at a height recorded, in emission order, so a client can confirm a call
         pub fn events(&self, height: u64) -> Result<Vec<contract::ContractEvent>, String> {
             contract::parse_events(&self.rpc("get_events", contract::events_body(height))?)
         }
 
-        /// The current per signer nonce a `signed by owner` order must carry, read from the contract's
         pub fn contract_nonce(&self, contract: &str, signer: &[u8; 32]) -> Result<u64, String> {
             let key = crate::contract::nonce_slot_key(signer);
             Ok(crate::contract::storage_value(&self.storage(contract)?, &key))
         }
 
-        /// The word at a scalar state field slot of a contract, read by its thirty two byte scalar key,
         pub fn contract_scalar(&self, contract: &str, slot: u64) -> Result<u64, String> {
             let key = crate::contract::scalar_slot_key(slot);
             Ok(crate::contract::storage_value(&self.storage(contract)?, &key))
         }
 
-        /// Build, sign, and submit a `signed by owner` order call. The caller seed and index sign and
         #[allow(clippy::too_many_arguments)]
         pub fn call_signed_order(
             &self,
@@ -501,7 +459,6 @@ mod client {
             Ok((signed, outcome, order))
         }
 
-        /// The general form of [`Client::call_signed_order`], whose order fields may include full
         #[allow(clippy::too_many_arguments)]
         pub fn call_typed_order(
             &self,
@@ -549,7 +506,6 @@ mod client {
             Ok((signed, outcome, order))
         }
 
-        /// Deploy a container with typed deploy parameters, returning the address it lands at.
         pub fn deploy_with_params(
             &self,
             seed: &[u8; SEED_LEN],
@@ -584,7 +540,6 @@ mod client {
             Ok((signed, outcome, contract))
         }
 
-        /// The word at a keyed map entry, by the map's domain tag and the whole key address.
         pub fn contract_map(
             &self,
             contract: &str,
@@ -595,7 +550,6 @@ mod client {
             Ok(crate::contract::storage_value(&self.storage(contract)?, &slot))
         }
 
-        /// Register this account's public key on the chain, so an account funded by a transfer, which
         pub fn register(
             &self,
             seed: &[u8; SEED_LEN],
@@ -669,12 +623,10 @@ mod tests {
         let phrase = mnemonic_from_seed(&seed);
         assert_eq!(phrase.split_whitespace().count(), 24);
         assert_eq!(seed_from_mnemonic(&phrase).unwrap(), seed);
-        // the phrase recovers the account the seed signs from
         assert_eq!(
             account_address(&seed_from_mnemonic(&phrase).unwrap(), 0),
             account_address(&seed, 0)
         );
-        // a mistyped word is refused by the checksum
         let mut words: Vec<&str> = phrase.split_whitespace().collect();
         words[0] = if words[0] == "abandon" { "ability" } else { "abandon" };
         assert!(seed_from_mnemonic(&words.join(" ")).is_err());

@@ -1,16 +1,11 @@
-//! A small HTTP client over the standard library, for native use and for proving the
-
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
-/// The largest reply the client will hold. A gateway reply is small, so this is far above
 const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 
-/// The ceiling on connect, read, and write, so a stalled peer cannot hang the client.
 const TIMEOUT: Duration = Duration::from_secs(20);
 
-/// POST a JSON body to a base and a path, returning the status code and the response
 pub fn post(base: &str, path: &str, body: &str) -> Result<(u16, String), String> {
     if path.contains(['\r', '\n']) {
         return Err("the path carries a line break".to_string());
@@ -28,10 +23,6 @@ pub fn post(base: &str, path: &str, body: &str) -> Result<(u16, String), String>
         .map_err(|e| format!("resolve: {e}"))?
         .next()
         .ok_or("the host did not resolve")?;
-    // Refuse plaintext to anything but a loopback node. There is no TLS on this transport, so over an
-    // untrusted network a gateway's fee and nonce are unauthenticated and an attacker in the middle can
-    // rewrite them to drain the signer. A loopback node is the signer's own machine and is safe. Reach
-    // a remote gateway through a secure tunnel that terminates on loopback here.
     if !addr.ip().is_loopback() {
         return Err(format!(
             "refusing plaintext to a non-loopback gateway ({host}); its fee and nonce would be \
@@ -85,7 +76,6 @@ pub fn post(base: &str, path: &str, body: &str) -> Result<(u16, String), String>
     Ok((status, body))
 }
 
-/// Split a `host:port`. An IPv6 literal is bracketed, `[host]:port`, so the host inside the
 fn split_hostport(hostport: &str) -> Result<(&str, u16), String> {
     if let Some(rest) = hostport.strip_prefix('[') {
         let (host, after) = rest

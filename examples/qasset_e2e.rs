@@ -1,19 +1,14 @@
-//! QAsset end to end against a live gateway: deploy with parameters, mint, transfer, and the three
-
 use std::thread::sleep;
 use std::time::Duration;
 
 use qcore::contract::{DeployParam, FieldArg, FieldValue};
 use qcore::{account_address, Client, Submit, TxStatus};
 
-/// The funded keyed deployer, owner, and first holder.
 const DEPLOYER_SEED: [u8; 32] = [11u8; 32];
-/// A second holder, receives balance only.
 const HOLDER2_SEED: [u8; 32] = [33u8; 32];
-/// A non owner key.
 const STRANGER_SEED: [u8; 32] = [22u8; 32];
 
-// Ground truth from `quanta-cli emit examples/QAsset.qs`.
+// ground truth: quanta-cli emit
 const MINT_SELECTOR: [u8; 4] = [0x3e, 0xcc, 0xb9, 0xbc];
 const TRANSFER_SELECTOR: [u8; 4] = [0xb8, 0x4d, 0xbd, 0x2c];
 const MINTED_SELECTOR: [u8; 4] = [0xaf, 0x05, 0xf8, 0x0a];

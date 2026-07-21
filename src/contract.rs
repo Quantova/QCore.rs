@@ -1,24 +1,17 @@
-//! The client side contract call ABI.
-
 use qtv_account::{account_seed, SCHEME_LATTICE};
 use qtv_crypto::{ml_dsa, sha3};
 
 use crate::json::{self, object, Json};
 
-/// The trusted execution context the node injects at the front of contract scratch memory before an
+// mirrors the node's CONTRACT_CONTEXT_BYTES
 pub const CONTRACT_CONTEXT_BYTES: u64 = 72;
 
-/// The byte width of a machine word.
 const WORD: u64 = 8;
 
-/// The domain tag of the canonical signed order message. A signature over the message can be reused for
 const SIGNED_MSG_TAG: &[u8; 8] = b"QTVSGN01";
-/// The domain tag of the per signer nonce slot preimage, separating a nonce slot from any other hashed
 const NONCE_TAG: &[u8; 8] = b"QTVNONCE";
 
-// Byte offsets of each field of the canonical order message, relative to the message start. They are
-// the compiler's own `MSG_*_OFF` constants: the domain tag, the contract self address, the entry
-// selector word, the signer address, the per signer nonce, then the committed order field words.
+// compiler's own MSG_*_OFF offsets
 const MSG_TAG_OFF: usize = 0;
 const MSG_CONTRACT_OFF: usize = 8;
 const MSG_SELECTOR_OFF: usize = 40;
@@ -26,16 +19,15 @@ const MSG_SIGNER_OFF: usize = 48;
 const MSG_NONCE_OFF: usize = 80;
 const MSG_FIELDS_OFF: usize = 88;
 
-/// A default byte offset in scratch memory for the verify region, the public key then signature then
+// scratch offset avoiding compiled regions
 pub const DEFAULT_REGION_OFFSET: u64 = 8192;
 
-/// Marks deploy arguments as carrying deploy parameters after the container. The node's own tag.
+// the node's own tag
 const DEPLOY_PARAMS_TAG: &[u8; 8] = b"QDEPLOY1";
 
-/// Closes the deploy parameter region. The compiler's own sentinel.
+// the compiler's own sentinel
 const GENESIS_PARAM_SENTINEL: &[u8; 8] = b"QGENSNTL";
 
-/// The signer address the chain, the machine's ADDR opcode, and a contract's signed prologue all
 pub fn signer_address(scheme: u8, public_key: &[u8]) -> [u8; 32] {
     let mut input = Vec::with_capacity(1 + public_key.len());
     input.push(scheme);
@@ -43,14 +35,12 @@ pub fn signer_address(scheme: u8, public_key: &[u8]) -> [u8; 32] {
     sha3::sha3_256(&input)
 }
 
-/// The signer address of the module lattice account a seed and index derive, the owner an order is
 pub fn order_signer(owner_seed: &[u8; crate::SEED_LEN], owner_index: u64) -> [u8; 32] {
     let seed = account_seed(owner_seed, SCHEME_LATTICE, owner_index);
     let (public_key, _secret) = ml_dsa::keygen(&seed);
     signer_address(SCHEME_LATTICE, &public_key)
 }
 
-/// The full thirty two byte storage key of the per signer nonce slot, the SHA3-256 of the nonce domain
 pub fn nonce_slot_key(signer: &[u8; 32]) -> [u8; 32] {
     let mut input = Vec::with_capacity(NONCE_TAG.len() + 32);
     input.extend_from_slice(NONCE_TAG);
@@ -58,12 +48,10 @@ pub fn nonce_slot_key(signer: &[u8; 32]) -> [u8; 32] {
     sha3::sha3_256(&input)
 }
 
-/// The full thirty two byte storage key of a scalar state field slot, twenty four zero bytes then the
 pub fn scalar_slot_key(slot: u64) -> [u8; 32] {
     qtv_vm::abi::scalar_key(slot)
 }
 
-/// The full thirty two byte storage key of a keyed map entry, the SHA3-256 of the map's eight byte
 pub fn map_slot_key(map_domain_tag: u64, key_address: &[u8; 32]) -> [u8; 32] {
     let mut input = Vec::with_capacity(WORD as usize + 32);
     input.extend_from_slice(&map_domain_tag.to_be_bytes());
@@ -71,7 +59,6 @@ pub fn map_slot_key(map_domain_tag: u64, key_address: &[u8; 32]) -> [u8; 32] {
     sha3::sha3_256(&input)
 }
 
-/// A committed order field or call argument: a machine word or a full address.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FieldValue {
     Word(u64),
@@ -94,14 +81,12 @@ impl FieldValue {
     }
 }
 
-/// An argument value and the scratch offset it is placed at. Order fields are listed in the message's
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldArg {
     pub offset: u64,
     pub value: FieldValue,
 }
 
-/// The canonical order message: the domain tag, the contract, the selector word, the signer, the
 pub fn canonical_order_message_typed(
     contract_id: &[u8; 32],
     selector: [u8; 4],
@@ -127,7 +112,6 @@ pub fn canonical_order_message_typed(
     msg
 }
 
-/// The word only case of [`canonical_order_message_typed`].
 pub fn canonical_order_message(
     contract_id: &[u8; 32],
     selector: [u8; 4],
@@ -139,21 +123,15 @@ pub fn canonical_order_message(
     canonical_order_message_typed(contract_id, selector, signer, nonce, &typed)
 }
 
-/// The argument layout of one `signed by owner` entry, read from the compiler's emit output. The scheme
 #[derive(Debug, Clone)]
 pub struct OrderLayout {
-    /// The `<name>#scheme` argument word offset, carrying the one byte signature scheme identifier.
     pub scheme_off: u64,
-    /// The `<name>#ptr` argument word offset, carrying the byte offset of the verify region.
     pub ptr_off: u64,
-    /// The order field word offsets, in the first appearance order the canonical message commits to.
     pub field_offs: Vec<u64>,
-    /// Where the verify region is laid out in scratch memory. [`DEFAULT_REGION_OFFSET`] is a safe
     pub region_off: u64,
 }
 
 impl OrderLayout {
-    /// The layout of an entry with one signed order, its scheme and pointer words and its field words,
     pub fn new(scheme_off: u64, ptr_off: u64, field_offs: Vec<u64>) -> OrderLayout {
         OrderLayout {
             scheme_off,
@@ -164,26 +142,17 @@ impl OrderLayout {
     }
 }
 
-/// A built and signed order call: the argument bytes to submit, and the parts that went into it so a
 #[derive(Debug, Clone)]
 pub struct SignedOrderCall {
-    /// The call arguments a contract call transaction carries: the four byte entry selector followed by
     pub call_args: Vec<u8>,
-    /// The argument memory alone, the bytes the node places into scratch after overwriting the trusted
     pub user_memory: Vec<u8>,
-    /// The canonical order message the signature is over, the exact bytes the contract rebuilds.
     pub message: Vec<u8>,
-    /// The module lattice signature over the message.
     pub signature: Vec<u8>,
-    /// The owner's public key, at the start of the verify region.
     pub public_key: Vec<u8>,
-    /// The signer address the order binds to, SHA3-256 of the scheme byte and the public key.
     pub signer: [u8; 32],
-    /// The per signer nonce the order carries.
     pub nonce: u64,
 }
 
-/// Lay out and sign a module lattice `signed by owner` order call. Given the contract, the entry
 pub fn build_signed_order_call(
     contract: &str,
     selector: [u8; 4],
@@ -222,7 +191,6 @@ pub fn build_signed_order_call(
     )
 }
 
-/// The general form of [`build_signed_order_call`], whose order fields may be full addresses as well as
 #[allow(clippy::too_many_arguments)]
 pub fn build_typed_order_call(
     contract: &str,
@@ -299,7 +267,6 @@ pub fn build_typed_order_call(
     })
 }
 
-/// A plain call's arguments: the selector then the argument memory, the context left for the node.
 pub fn build_call_args(selector: [u8; 4], args: &[FieldArg]) -> Result<Vec<u8>, String> {
     let mem_len = args
         .iter()
@@ -317,7 +284,6 @@ pub fn build_call_args(selector: [u8; 4], args: &[FieldArg]) -> Result<Vec<u8>, 
     Ok(call_args)
 }
 
-/// A deploy parameter value, matching the widths the compiler assigns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeployParam {
     Address([u8; 32]),
@@ -348,7 +314,6 @@ impl DeployParam {
     }
 }
 
-/// Frame deploy arguments: the tag, the container length, the container, then the parameters closed by
 pub fn build_deploy_call(container: &[u8], params: &[DeployParam]) -> Vec<u8> {
     let mut region = Vec::new();
     for param in params {
@@ -365,7 +330,6 @@ pub fn build_deploy_call(container: &[u8], params: &[DeployParam]) -> Vec<u8> {
     out
 }
 
-/// The raw thirty two byte payload of a q1 contract address, the bytes the trusted context injects as
 fn contract_id(contract: &str) -> Result<[u8; 32], String> {
     let payload = qtv_idfmt::parse_address(contract).map_err(|_| "the contract is not a q1 address")?;
     payload
@@ -374,7 +338,6 @@ fn contract_id(contract: &str) -> Result<[u8; 32], String> {
         .map_err(|_| "the contract address is not the canonical thirty two byte width".to_string())
 }
 
-/// Write a machine word big endian into scratch memory at a byte offset, the way the machine's MLoad
 fn put_word(memory: &mut [u8], offset: u64, value: u64) -> Result<(), String> {
     let start = usize::try_from(offset).map_err(|_| "an argument offset is too large")?;
     let end = start.checked_add(WORD as usize).ok_or("an argument word overflows scratch")?;
@@ -385,7 +348,6 @@ fn put_word(memory: &mut [u8], offset: u64, value: u64) -> Result<(), String> {
     Ok(())
 }
 
-/// Write a byte run into scratch memory at a byte offset.
 fn put_bytes(memory: &mut [u8], offset: u64, bytes: &[u8]) -> Result<(), String> {
     let start = usize::try_from(offset).map_err(|_| "an argument offset is too large")?;
     let end = start.checked_add(bytes.len()).ok_or("an argument value overflows scratch")?;
@@ -396,27 +358,20 @@ fn put_bytes(memory: &mut [u8], offset: u64, bytes: &[u8]) -> Result<(), String>
     Ok(())
 }
 
-// The wire encoders and decoders for contract reads. A binding calls these so no host builds a request
-// body or reads a response field by hand.
-
-/// The request body for get storage.
 pub fn storage_body(address: &str) -> String {
     object(vec![("address", Json::str(address))]).render()
 }
 
-/// The request body for get events at a height.
 pub fn events_body(height: u64) -> String {
     object(vec![("height", Json::Int(height))]).render()
 }
 
-/// One storage slot of a contract, its full thirty two byte key and the word it holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageSlot {
     pub slot: [u8; 32],
     pub value: u64,
 }
 
-/// One event a block recorded, the contract that emitted it, its four byte interface selector, and its
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContractEvent {
     pub contract: String,
@@ -424,7 +379,6 @@ pub struct ContractEvent {
     pub data: Vec<u8>,
 }
 
-/// Parse a get storage response into its slots. Each slot key is sixty four hex characters and each
 pub fn parse_storage(response: &str) -> Result<Vec<StorageSlot>, String> {
     let v = json::parse(response)?;
     let items = v
@@ -453,7 +407,6 @@ pub fn parse_storage(response: &str) -> Result<Vec<StorageSlot>, String> {
     Ok(slots)
 }
 
-/// The word at a storage slot key among parsed slots, or zero when the slot is absent, the way the
 pub fn storage_value(slots: &[StorageSlot], key: &[u8; 32]) -> u64 {
     slots
         .iter()
@@ -462,7 +415,6 @@ pub fn storage_value(slots: &[StorageSlot], key: &[u8; 32]) -> u64 {
         .unwrap_or(0)
 }
 
-/// Parse a get events response into its events, each with the contract that emitted it, its selector,
 pub fn parse_events(response: &str) -> Result<Vec<ContractEvent>, String> {
     let v = json::parse(response)?;
     let items = v
@@ -499,7 +451,6 @@ pub fn parse_events(response: &str) -> Result<Vec<ContractEvent>, String> {
     Ok(events)
 }
 
-/// The whole payload word of a single word event, big endian, so a `Bumped(u64)` event reads back the
 pub fn event_word(data: &[u8]) -> Option<u64> {
     let bytes: [u8; 8] = data.try_into().ok()?;
     Some(u64::from_be_bytes(bytes))
@@ -509,20 +460,15 @@ pub fn event_word(data: &[u8]) -> Option<u64> {
 mod tests {
     use super::*;
 
-    // The Counter contract the secured compiler emits, its bump entry signed by owner. The selector and
-    // the argument layout are the ground truth from `quanta-cli emit`.
     const BUMP_SELECTOR: [u8; 4] = [0x6c, 0xad, 0x12, 0xfc];
     const BUMPED_SELECTOR: [u8; 4] = [0x6e, 0x82, 0x53, 0x1d];
 
     fn counter_layout() -> OrderLayout {
-        // @caller 0, @contract 32, @time 64, order#scheme 72, order#ptr 80, order.step 88.
         OrderLayout::new(72, 80, vec![88])
     }
 
     #[test]
     fn the_signer_address_is_the_account_address_payload() {
-        // The signer address the order binds to is the raw payload of the owner's own q1 address, so a
-        // contract that stored `owner = deployer` binds the deployer's key.
         let seed = [5u8; crate::SEED_LEN];
         let signer = order_signer(&seed, 0);
         let address = crate::account_address(&seed, 0);
@@ -538,16 +484,12 @@ mod tests {
         let order =
             build_signed_order_call(&contract, BUMP_SELECTOR, &layout, &[5], &seed, 0, 0).unwrap();
 
-        // The scheme word carries the module lattice scheme, the pointer word carries the region
-        // offset, and the field word carries the step, each big endian at the emit offset.
         assert_eq!(word_at(&order.user_memory, 72), u64::from(SCHEME_LATTICE));
         assert_eq!(word_at(&order.user_memory, 80), DEFAULT_REGION_OFFSET);
         assert_eq!(word_at(&order.user_memory, 88), 5);
 
-        // The trusted context stays zero for the node to inject.
         assert!(order.user_memory[..CONTRACT_CONTEXT_BYTES as usize].iter().all(|&b| b == 0));
 
-        // The call args are the selector then the argument memory.
         assert_eq!(&order.call_args[..4], &BUMP_SELECTOR);
         assert_eq!(&order.call_args[4..], &order.user_memory[..]);
     }
@@ -580,8 +522,6 @@ mod tests {
         assert_eq!(order.message, expected);
         assert_eq!(order.message.len(), 96, "tag 8, contract 32, selector 8, signer 32, nonce 8, one field 8");
 
-        // The signature the client produced verifies over the message under the owner's public key, the
-        // exact check the machine's verify opcode runs.
         assert!(ml_dsa::verify(
             order.public_key.as_slice().try_into().unwrap(),
             &order.message,
@@ -602,7 +542,6 @@ mod tests {
     fn a_field_count_mismatch_is_refused_before_signing() {
         let seed = [1u8; crate::SEED_LEN];
         let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
-        // The Counter layout expects one field; two is refused.
         assert!(build_signed_order_call(&contract, BUMP_SELECTOR, &counter_layout(), &[1, 2], &seed, 0, 0).is_err());
     }
 
@@ -630,9 +569,6 @@ mod tests {
         u64::from_be_bytes(memory[off..off + 8].try_into().unwrap())
     }
 
-    // The QAsset mint layout from `quanta-cli emit examples/QAsset.qs`: order.to at 72 as a full address,
-    // order#scheme at 104, order#ptr at 112, order.amount at 120. The message commits order.amount then
-    // order.to, the compiler's first appearance order.
     const MINT_SELECTOR: [u8; 4] = [0x3e, 0xcc, 0xb9, 0xbc];
 
     #[test]
@@ -646,20 +582,15 @@ mod tests {
         ];
         let order = build_typed_order_call(&contract, MINT_SELECTOR, 104, 112, DEFAULT_REGION_OFFSET, &fields, &seed, 0, 0).unwrap();
 
-        // The message is tag, contract, selector, signer, nonce, then the amount word and the whole
-        // recipient address: eighty eight bytes of header plus one word plus one address.
         assert_eq!(order.message.len(), 88 + 8 + 32);
         assert_eq!(&order.message[88..96], &500u64.to_be_bytes());
         assert_eq!(&order.message[96..128], &to);
 
-        // The amount word lands at its offset and the whole address at its offset, and the scheme and
-        // pointer words carry the module lattice scheme and the region offset.
         assert_eq!(word_at(&order.user_memory, 120), 500);
         assert_eq!(&order.user_memory[72..104], &to);
         assert_eq!(word_at(&order.user_memory, 104), u64::from(SCHEME_LATTICE));
         assert_eq!(word_at(&order.user_memory, 112), DEFAULT_REGION_OFFSET);
 
-        // The owner's signature verifies over the message, the exact check the machine's verify runs.
         assert!(ml_dsa::verify(
             order.public_key.as_slice().try_into().unwrap(),
             &order.message,
@@ -692,7 +623,6 @@ mod tests {
 
     #[test]
     fn build_call_args_places_typed_fields_and_leaves_the_context_zero() {
-        // The QAsset transfer layout: to at 72 as a full address, amount at 104.
         let to = [0x2Cu8; 32];
         let selector = [0xb8, 0x4d, 0xbd, 0x2c];
         let args = build_call_args(
@@ -719,13 +649,11 @@ mod tests {
             &container,
             &[DeployParam::Address(owner), DeployParam::U128(supply)],
         );
-        // The frame: the tag, the container length, the container, then the parameter region.
         assert_eq!(&args[..8], DEPLOY_PARAMS_TAG);
         assert_eq!(u32::from_be_bytes(args[8..12].try_into().unwrap()) as usize, container.len());
         let cstart = 12;
         let cend = cstart + container.len();
         assert_eq!(&args[cstart..cend], &container[..]);
-        // The parameter region: the owner address, the supply low then high word, then the sentinel.
         let region = &args[cend..];
         assert_eq!(&region[..32], &owner);
         assert_eq!(&region[32..40], &(supply as u64).to_be_bytes());
@@ -738,7 +666,6 @@ mod tests {
     fn a_paramless_deploy_carries_no_sentinel() {
         let container = b"QVM1 body".to_vec();
         let args = build_deploy_call(&container, &[]);
-        // Just the tag, the length, and the container, with an empty parameter region.
         assert_eq!(args.len(), 8 + 4 + container.len());
     }
 

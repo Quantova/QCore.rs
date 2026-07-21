@@ -1,5 +1,3 @@
-//! qcore, the terminal client for Quantova. It creates a wallet, reads the chain, and sends a
-
 use qcore::{
     account_address, account_public_key, generate_seed, mnemonic_from_seed, valid_address, Client,
     Submit, TxStatus,
@@ -37,7 +35,6 @@ fn run(args: &[String]) -> Result<(), String> {
     }
 }
 
-/// Create a wallet: a fresh master seed from the platform random source, its recovery phrase, and
 fn cmd_new() -> Result<(), String> {
     let seed = generate_seed()?;
     println!("seed    {}", to_hex(&seed));
@@ -48,7 +45,6 @@ fn cmd_new() -> Result<(), String> {
     Ok(())
 }
 
-/// The address of an account, given its seed and an optional index that defaults to zero.
 fn cmd_address(args: &[String]) -> Result<(), String> {
     let seed = parse_seed(args.first().ok_or("usage: qcore address <seed-hex> [index]")?)?;
     let index = parse_index(args.get(1))?;
@@ -56,7 +52,6 @@ fn cmd_address(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// The scheme, public key, and address of an account. An operator funding an account at genesis needs
 fn cmd_pubkey(args: &[String]) -> Result<(), String> {
     let seed = parse_seed(args.first().ok_or("usage: qcore pubkey <seed-hex> [index]")?)?;
     let index = parse_index(args.get(1))?;
@@ -66,7 +61,6 @@ fn cmd_pubkey(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// The chain id, the head height, and the fee the gateway reports.
 fn cmd_info(args: &[String]) -> Result<(), String> {
     let gateway = args.first().ok_or("usage: qcore info <gateway-url>")?;
     let info = Client::new(gateway.clone()).node_info()?;
@@ -77,7 +71,6 @@ fn cmd_info(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Register the account's public key on the chain, a one time step after an account is funded by a
 fn cmd_register(args: &[String]) -> Result<(), String> {
     if args.len() < 2 {
         return Err("usage: qcore register <gateway-url> <seed-hex>".to_string());
@@ -98,7 +91,6 @@ fn cmd_register(args: &[String]) -> Result<(), String> {
     }
 }
 
-/// An account's balance and nonce, read from the chain.
 fn cmd_balance(args: &[String]) -> Result<(), String> {
     let gateway = args.first().ok_or("usage: qcore balance <gateway-url> <address>")?;
     let address = args.get(1).ok_or("usage: qcore balance <gateway-url> <address>")?;
@@ -112,7 +104,6 @@ fn cmd_balance(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Sign and submit a transfer from a seed's first account. The caller states the highest fee it will
 fn cmd_send(args: &[String]) -> Result<(), String> {
     if args.len() < 5 {
         return Err(
@@ -136,7 +127,6 @@ fn cmd_send(args: &[String]) -> Result<(), String> {
     }
 }
 
-/// Where a transaction is: finalised at a height, still pending, or unknown to the node.
 fn cmd_status(args: &[String]) -> Result<(), String> {
     let gateway = args.first().ok_or("usage: qcore status <gateway-url> <tx-id>")?;
     let tx_id = args.get(1).ok_or("usage: qcore status <gateway-url> <tx-id>")?;
@@ -164,12 +154,10 @@ fn print_usage() {
     println!("  qcore status <gateway-url> <tx-id>                    where a transaction is");
 }
 
-/// Render bytes as lowercase hex.
 fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Parse a sixty four character hex seed into thirty two bytes.
 fn parse_seed(hex: &str) -> Result<[u8; 32], String> {
     let hex = hex.trim();
     if hex.len() != 64 {
@@ -183,7 +171,6 @@ fn parse_seed(hex: &str) -> Result<[u8; 32], String> {
     Ok(seed)
 }
 
-/// Parse an optional account index, defaulting to zero.
 fn parse_index(arg: Option<&String>) -> Result<u64, String> {
     match arg {
         Some(value) => value.parse().map_err(|_| "the index is not a number".to_string()),

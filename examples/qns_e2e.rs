@@ -121,7 +121,6 @@ fn run() -> Result<(), String> {
 
     let until = now_seconds() + YEAR_SECONDS;
 
-    // Jeff.Q and Mike.Q register to A, Bob.Q registers to B, so B is itself a registered owner.
     let jeff_height = register(&client, &OWNER_A_SEED, &contract, jeff, until, fee, "Jeff.Q", "A")?;
     assert_owner(&client, &contract, jeff, &a_id, "Jeff.Q owned by A in full")?;
     let reg_taken = client.contract_map(&contract, REGISTERED_BASE, &jeff)?;
@@ -174,8 +173,6 @@ fn run() -> Result<(), String> {
     fees_taken += RENEWAL_FEE * years;
     conservation(&client, &contract, fees_taken, swept, "after Mike.Q renew")?;
 
-    // The core proof: A resolves Mike.Q to a full target address, and all four resolution words read
-    // back reassemble to the whole thirty two byte target, no truncation.
     let target = b_id;
     let resolve_args = qcore::contract::build_call_args(
         SET_RESOLVED_SELECTOR,
@@ -212,8 +209,7 @@ fn run() -> Result<(), String> {
 
     println!("\n--- security ---");
 
-    // Negative 1: B is a registered owner of Bob.Q, but does not own Mike.Q or Jeff.Q, so neither a
-    // resolve of Mike.Q nor a transfer of Jeff.Q by B is accepted.
+    // negative 1
     let b_resolve = qcore::contract::build_call_args(
         SET_RESOLVED_SELECTOR,
         &[
@@ -249,7 +245,6 @@ fn run() -> Result<(), String> {
     println!("[neg1 ] PROOF: per name ownership binds the full owner, a different registered owner is refused");
     conservation(&client, &contract, fees_taken, swept, "after B's refused attempts")?;
 
-    // A transfers Jeff.Q to B, cleanly moving ownership.
     let transfer_args = qcore::contract::build_call_args(
         TRANSFER_SELECTOR,
         &[
@@ -268,7 +263,7 @@ fn run() -> Result<(), String> {
     println!("\n[transfer Jeff.Q] A -> B, owner_of[Jeff.Q] now reads B in full, event carries both owners");
     conservation(&client, &contract, fees_taken, swept, "after transfer")?;
 
-    // Negative 2: the prior owner A can no longer act on Jeff.Q, the new owner B can.
+    // negative 2
     let a_resolve_jeff = qcore::contract::build_call_args(
         SET_RESOLVED_SELECTOR,
         &[
@@ -322,7 +317,7 @@ fn run() -> Result<(), String> {
     println!("[neg2 ] PROOF: transfer moved the binding, the prior owner is gone and the new owner holds it");
     conservation(&client, &contract, fees_taken, swept, "after ownership move proofs")?;
 
-    // Negative 3: an unexpired name cannot be re-registered, the trusted time after gate refuses it.
+    // negative 3
     let expiry_before = client.contract_map(&contract, EXPIRY_BASE, &jeff)?;
     let owner_before = read_addr_value(&client, &contract, OWNER_OF_BASE, &jeff)?;
     let vault_before_retake = client.contract_scalar(&contract, VAULT_SLOT)?;
@@ -346,7 +341,7 @@ fn run() -> Result<(), String> {
     println!("\n[neg3 ] PROOF: an unexpired Jeff.Q could not be re-registered, expiry and owner unchanged, no fee, no event");
     conservation(&client, &contract, fees_taken, swept, "after refused retake")?;
 
-    // Negative 4: a non admin cannot sweep, the signed by admin binding refuses the stranger's own order.
+    // negative 4
     let vault_before_bad_sweep = client.contract_scalar(&contract, VAULT_SLOT)?;
     let (bad_w_tx, bad_w_out, bad_w_order) = client.call_typed_order(
         &STRANGER_SEED,
@@ -372,7 +367,6 @@ fn run() -> Result<(), String> {
     println!("\n[neg4 ] PROOF: a non admin sweep signed by {} was refused, vault unchanged, no event", hex(&bad_w_order.signer));
     conservation(&client, &contract, fees_taken, swept, "after refused withdraw")?;
 
-    // The admin sweeps the whole vault to zero.
     let sweep = client.contract_scalar(&contract, VAULT_SLOT)?;
     let (w_tx, w_out, w_order) = client.call_typed_order(
         &OWNER_A_SEED,
@@ -440,7 +434,7 @@ fn conservation(client: &Client, contract: &str, fees_taken: u64, swept: u64, at
     Ok(())
 }
 
-/// The thirty two byte storage key of word `word` of an address valued map entry: SHA3 of the map's
+// matches the code generator's derivation
 fn addr_word_key(base: u64, key: &[u8; 32], word: u64) -> [u8; 32] {
     let mut input = base.to_be_bytes().to_vec();
     input.extend_from_slice(key);
