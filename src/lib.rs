@@ -32,6 +32,25 @@ pub fn key_register_address() -> String {
         .expect("a full hash reaches the address floor")
 }
 
+/// The reserved address a contract deploy targets. A call to this address carrying a compiled
+pub fn vm_deploy_address() -> String {
+    qtv_idfmt::render_address(&qtv_crypto::sha3::sha3_256(b"qtv/vm/deploy"))
+        .expect("a full hash reaches the address floor")
+}
+
+/// The address a deploy from a deployer at a nonce lands the contract at, a pure function of the
+pub fn contract_address(deployer: &str, nonce: u64) -> Option<String> {
+    let payload = qtv_idfmt::parse_address(deployer).ok()?;
+    if payload.len() != 32 {
+        return None;
+    }
+    let mut input = Vec::with_capacity(16 + 32 + 8);
+    input.extend_from_slice(b"qtv/vm/contract/");
+    input.extend_from_slice(&payload);
+    input.extend_from_slice(&nonce.to_le_bytes());
+    qtv_idfmt::render_address(&qtv_crypto::sha3::sha3_256(&input)).ok()
+}
+
 /// A signed transfer ready to submit: its canonical bytes, its id, and the sender it
 #[derive(Debug, Clone)]
 pub struct SignedTransfer {
