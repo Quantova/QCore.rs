@@ -59,17 +59,35 @@ pub fn map_slot_key(map_domain_tag: u64, key_address: &[u8; 32]) -> [u8; 32] {
     sha3::sha3_256(&input)
 }
 
+// a Q_Name occupies a thirty two byte plaintext label window followed by an eight byte big endian
+// length word, so a field placed at an offset spans forty bytes: the window at the offset and the
+// length at offset + 32.
+const NAME_WINDOW: usize = 32;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FieldValue {
     Word(u64),
     Address([u8; 32]),
+    Name(Vec<u8>),
 }
 
 impl FieldValue {
+    /// The bare label bytes of a Q_Name field, the identity the chain hashes and the client and the
+    pub fn name(label: &str) -> FieldValue {
+        FieldValue::Name(label.as_bytes().to_vec())
+    }
+
     fn bytes(&self) -> Vec<u8> {
         match self {
             FieldValue::Word(w) => w.to_be_bytes().to_vec(),
             FieldValue::Address(a) => a.to_vec(),
+            FieldValue::Name(label) => {
+                let mut out = vec![0u8; NAME_WINDOW + WORD as usize];
+                let n = label.len().min(NAME_WINDOW);
+                out[..n].copy_from_slice(&label[..n]);
+                out[NAME_WINDOW..].copy_from_slice(&(label.len() as u64).to_be_bytes());
+                out
+            }
         }
     }
 
@@ -77,8 +95,14 @@ impl FieldValue {
         match self {
             FieldValue::Word(_) => WORD,
             FieldValue::Address(_) => 32,
+            FieldValue::Name(_) => NAME_WINDOW as u64 + WORD,
         }
     }
+}
+
+/// The thirty two byte storage key a Q_Name resolves to: SHA3 of the bare label bytes, the same key
+pub fn name_key(label: &str) -> [u8; 32] {
+    sha3::sha3_256(label.as_bytes())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -638,6 +662,27 @@ mod tests {
         assert!(mem[..CONTRACT_CONTEXT_BYTES as usize].iter().all(|&b| b == 0), "context left for the node");
         assert_eq!(&mem[72..104], &to);
         assert_eq!(word_at(mem, 104), 200);
+    }
+
+    #[test]
+    fn a_name_field_places_the_label_window_then_the_length_word() {
+        let selector = [0x2d, 0xfb, 0xa5, 0xfc];
+        let args = build_call_args(
+            selector,
+            &[
+                FieldArg { offset: 72, value: FieldValue::name("alice") },
+                FieldArg { offset: 112, value: FieldValue::Word(2) },
+            ],
+        )
+        .unwrap();
+        let mem = &args[4..];
+        assert!(mem[..CONTRACT_CONTEXT_BYTES as usize].iter().all(|&b| b == 0), "context stays for the node");
+        assert_eq!(&mem[72..77], b"alice", "the label bytes lead the window");
+        assert!(mem[77..104].iter().all(|&b| b == 0), "the window tail is zero padded");
+        assert_eq!(word_at(mem, 104), 5, "the length word sits directly after the window");
+        assert_eq!(word_at(mem, 112), 2, "the following word argument lands after the name");
+        // The client's read key equals SHA3 of the bare label, the same key the machine derives.
+        assert_eq!(name_key("alice"), sha3::sha3_256(b"alice"));
     }
 
     #[test]
