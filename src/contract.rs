@@ -105,6 +105,13 @@ pub fn name_key(label: &str) -> [u8; 32] {
     sha3::sha3_256(label.as_bytes())
 }
 
+/// The thirty two byte key region a token id resolves to: the id big endian in the leading word, the
+pub fn id_key(id: u64) -> [u8; 32] {
+    let mut region = [0u8; 32];
+    region[..WORD as usize].copy_from_slice(&id.to_be_bytes());
+    region
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldArg {
     pub offset: u64,
@@ -683,6 +690,21 @@ mod tests {
         assert_eq!(word_at(mem, 112), 2, "the following word argument lands after the name");
         // The client's read key equals SHA3 of the bare label, the same key the machine derives.
         assert_eq!(name_key("alice"), sha3::sha3_256(b"alice"));
+    }
+
+    #[test]
+    fn a_token_id_promotes_to_the_leading_word_of_a_zeroed_region() {
+        let region = id_key(7);
+        assert_eq!(&region[..8], &7u64.to_be_bytes(), "the id leads the region big endian");
+        assert!(region[8..].iter().all(|&b| b == 0), "the rest of the region is zero");
+        assert_ne!(id_key(1), id_key(2), "distinct ids promote to distinct regions");
+        // The map key over the region matches the machine: SHA3 of the map tag then the whole region.
+        let base: u64 = 1 << 40;
+        assert_eq!(map_slot_key(base, &id_key(7)), {
+            let mut input = base.to_be_bytes().to_vec();
+            input.extend_from_slice(&id_key(7));
+            sha3::sha3_256(&input)
+        });
     }
 
     #[test]
