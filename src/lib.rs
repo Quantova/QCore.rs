@@ -9,20 +9,14 @@ use qtv_account::derive;
 use qtv_codec::{to_bytes, Encoder};
 use qtv_tx::{sign, Body, Call};
 
-pub use qtv_tx::{LOCAL_CHAIN_ID, MAINNET_CHAIN_ID, TESTNET_CHAIN_ID};
+pub use qtv_tx::{
+    chain_id_from_name, LOCAL_CHAIN_ID, LOCAL_CHAIN_NAME, MAINNET_CHAIN_ID, MAINNET_CHAIN_NAME,
+    TESTNET_CHAIN_ID, TESTNET_CHAIN_NAME,
+};
 
 pub const SEED_LEN: usize = 32;
 
 pub const NATIVE_TRANSFER_METER: u64 = 1_210;
-
-fn canonical_address(address: &str) -> String {
-    match qtv_idfmt::parse_address(address) {
-        Ok(payload) => {
-            qtv_idfmt::render_address(&payload).unwrap_or_else(|_| address.to_string())
-        }
-        Err(_) => address.to_string(),
-    }
-}
 
 pub fn account_address(seed: &[u8; SEED_LEN], index: u64) -> String {
     derive(seed, index).address()
@@ -73,7 +67,7 @@ pub fn sign_payable_call(
     fee: u128,
 ) -> SignedTransfer {
     let sender = derive(seed, index);
-    let call = Call::new(canonical_address(target), args);
+    let call = Call::new(target.to_string(), args);
     let body = Body::with_context(
         sender.address(),
         nonce,
