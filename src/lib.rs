@@ -9,9 +9,20 @@ use qtv_account::derive;
 use qtv_codec::{to_bytes, Encoder};
 use qtv_tx::{sign, Body, Call};
 
+pub use qtv_tx::{LOCAL_CHAIN_ID, MAINNET_CHAIN_ID, TESTNET_CHAIN_ID};
+
 pub const SEED_LEN: usize = 32;
 
 pub const NATIVE_TRANSFER_METER: u64 = 1_210;
+
+fn canonical_address(address: &str) -> String {
+    match qtv_idfmt::parse_address(address) {
+        Ok(payload) => {
+            qtv_idfmt::render_address(&payload).unwrap_or_else(|_| address.to_string())
+        }
+        Err(_) => address.to_string(),
+    }
+}
 
 pub fn account_address(seed: &[u8; SEED_LEN], index: u64) -> String {
     derive(seed, index).address()
@@ -50,6 +61,36 @@ pub struct SignedTransfer {
     pub tx_bytes: Vec<u8>,
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn sign_payable_call(
+    seed: &[u8; SEED_LEN],
+    index: u64,
+    target: &str,
+    args: Vec<u8>,
+    value: u64,
+    nonce: u64,
+    meter_limit: u64,
+    fee: u128,
+) -> SignedTransfer {
+    let sender = derive(seed, index);
+    let call = Call::new(canonical_address(target), args);
+    let body = Body::with_context(
+        sender.address(),
+        nonce,
+        meter_limit,
+        fee,
+        call,
+        value,
+        LOCAL_CHAIN_ID,
+    );
+    let wrapper = sign(&sender, &body);
+    SignedTransfer {
+        from: sender.address(),
+        tx_id: wrapper.id(),
+        tx_bytes: to_bytes(&wrapper),
+    }
+}
+
 pub fn sign_call(
     seed: &[u8; SEED_LEN],
     index: u64,
@@ -59,15 +100,7 @@ pub fn sign_call(
     meter_limit: u64,
     fee: u128,
 ) -> SignedTransfer {
-    let sender = derive(seed, index);
-    let call = Call::new(target.to_string(), args);
-    let body = Body::new(sender.address(), nonce, meter_limit, fee, call);
-    let wrapper = sign(&sender, &body);
-    SignedTransfer {
-        from: sender.address(),
-        tx_id: wrapper.id(),
-        tx_bytes: to_bytes(&wrapper),
-    }
+    sign_payable_call(seed, index, target, args, 0, nonce, meter_limit, fee)
 }
 
 pub fn sign_transfer(
@@ -349,7 +382,7 @@ mod client {
             max_fee: u128,
         ) -> Result<(SignedTransfer, Submit), String> {
             if !valid_address(to) {
-                return Err("the recipient is not a q1 address".to_string());
+                return Err("the recipient is not a Q1 address".to_string());
             }
             let info = self.node_info()?;
             if info.transfer_fee > max_fee {
@@ -374,8 +407,22 @@ mod client {
             meter_limit: u64,
             max_fee: u128,
         ) -> Result<(SignedTransfer, Submit), String> {
+            self.call_payable(seed, index, target, args, 0, meter_limit, max_fee)
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        pub fn call_payable(
+            &self,
+            seed: &[u8; SEED_LEN],
+            index: u64,
+            target: &str,
+            args: Vec<u8>,
+            value: u64,
+            meter_limit: u64,
+            max_fee: u128,
+        ) -> Result<(SignedTransfer, Submit), String> {
             if !valid_address(target) {
-                return Err("the target is not a q1 address".to_string());
+                return Err("the target is not a Q1 address".to_string());
             }
             let info = self.node_info()?;
             if info.transfer_fee > max_fee {
@@ -386,7 +433,16 @@ mod client {
             }
             let sender = account_address(seed, index);
             let account = self.account(&sender)?;
-            let signed = sign_call(seed, index, target, args, account.nonce, meter_limit, info.transfer_fee);
+            let signed = sign_payable_call(
+                seed,
+                index,
+                target,
+                args,
+                value,
+                account.nonce,
+                meter_limit,
+                info.transfer_fee,
+            );
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome))
         }
@@ -424,7 +480,7 @@ mod client {
             max_fee: u128,
         ) -> Result<(SignedTransfer, Submit, contract::SignedOrderCall), String> {
             if !valid_address(contract) {
-                return Err("the contract is not a q1 address".to_string());
+                return Err("the contract is not a Q1 address".to_string());
             }
             let signer = contract::order_signer(owner_seed, owner_index);
             let nonce = self.contract_nonce(contract, &signer)?;
@@ -476,7 +532,7 @@ mod client {
             max_fee: u128,
         ) -> Result<(SignedTransfer, Submit, contract::SignedOrderCall), String> {
             if !valid_address(contract) {
-                return Err("the contract is not a q1 address".to_string());
+                return Err("the contract is not a Q1 address".to_string());
             }
             let signer = contract::order_signer(owner_seed, owner_index);
             let nonce = self.contract_nonce(contract, &signer)?;
@@ -526,7 +582,7 @@ mod client {
             let account = self.account(&deployer)?;
             let args = contract::build_deploy_call(container, params);
             let contract = contract_address(&deployer, account.nonce)
-                .ok_or("the deployer is not a q1 address")?;
+                .ok_or("the deployer is not a Q1 address")?;
             let signed = sign_call(
                 seed,
                 index,
@@ -586,6 +642,52 @@ mod tests {
         let call = sign_call(&seed, 0, &to, encoder.into_bytes(), 3, NATIVE_TRANSFER_METER, 500);
         assert_eq!(transfer.tx_bytes, call.tx_bytes);
         assert_eq!(transfer.tx_id, call.tx_id);
+    }
+
+    #[test]
+    fn a_derived_address_renders_uppercase_q1() {
+        let address = account_address(&[7u8; SEED_LEN], 0);
+        assert!(address.starts_with("Q1"));
+        assert_eq!(address, address.to_ascii_uppercase());
+    }
+
+    #[test]
+    fn a_payable_call_binds_the_value_into_the_signature() {
+        let seed = [7u8; SEED_LEN];
+        let target = account_address(&seed, 1);
+        let free = sign_call(&seed, 0, &target, vec![1, 2, 3], 5, 1210, 500);
+        let payable_zero = sign_payable_call(&seed, 0, &target, vec![1, 2, 3], 0, 5, 1210, 500);
+        assert_eq!(free.tx_bytes, payable_zero.tx_bytes);
+        assert_eq!(free.tx_id, payable_zero.tx_id);
+        let funded = sign_payable_call(&seed, 0, &target, vec![1, 2, 3], 1000, 5, 1210, 500);
+        assert_ne!(funded.tx_bytes, free.tx_bytes);
+        assert_ne!(funded.tx_id, free.tx_id);
+    }
+
+    #[test]
+    fn the_signed_bytes_match_the_chain_body_and_verify() {
+        let seed = [7u8; SEED_LEN];
+        let sender = derive(&seed, 0);
+        let target = account_address(&seed, 1);
+        let call = Call::new(target.clone(), vec![9, 9, 9]);
+        let body = Body::with_context(sender.address(), 4, 1210, 750, call, 2500, LOCAL_CHAIN_ID);
+        let wrapper = sign(&sender, &body);
+        assert!(qtv_tx::verify(&wrapper, sender.public_key()));
+        let signed = sign_payable_call(&seed, 0, &target, vec![9, 9, 9], 2500, 4, 1210, 750);
+        assert_eq!(signed.tx_bytes, to_bytes(&wrapper));
+        assert_eq!(signed.tx_id, wrapper.id());
+    }
+
+    #[test]
+    fn address_case_cannot_change_the_signature() {
+        let seed = [7u8; SEED_LEN];
+        let target = account_address(&seed, 1);
+        let lowered = target.to_ascii_lowercase();
+        assert_ne!(target, lowered);
+        let upper = sign_call(&seed, 0, &target, vec![4, 2], 9, 1210, 500);
+        let lower = sign_call(&seed, 0, &lowered, vec![4, 2], 9, 1210, 500);
+        assert_eq!(upper.tx_bytes, lower.tx_bytes);
+        assert_eq!(upper.tx_id, lower.tx_id);
     }
 
     #[test]
