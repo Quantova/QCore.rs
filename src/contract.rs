@@ -362,7 +362,7 @@ pub fn build_deploy_call(container: &[u8], params: &[DeployParam]) -> Vec<u8> {
 }
 
 fn contract_id(contract: &str) -> Result<[u8; 32], String> {
-    let payload = qtv_idfmt::parse_address(contract).map_err(|_| "the contract is not a q1 address")?;
+    let payload = qtv_idfmt::parse_address(contract).map_err(|_| "the contract is not a Q1 address")?;
     payload
         .as_slice()
         .try_into()
@@ -496,6 +496,12 @@ mod tests {
 
     fn counter_layout() -> OrderLayout {
         OrderLayout::new(72, 80, vec![88])
+    }
+
+    #[test]
+    fn a_bad_contract_address_names_the_uppercase_q1_form() {
+        let err = super::contract_id("not an address").unwrap_err();
+        assert!(err.contains("Q1 address"));
     }
 
     #[test]
