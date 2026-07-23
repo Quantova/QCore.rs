@@ -95,7 +95,7 @@ fn cmd_balance(args: &[String]) -> Result<(), String> {
     let gateway = args.first().ok_or("usage: qcore balance <gateway-url> <address>")?;
     let address = args.get(1).ok_or("usage: qcore balance <gateway-url> <address>")?;
     if !valid_address(address) {
-        return Err("the address is not a q1 address".to_string());
+        return Err("the address is not a Q1 address".to_string());
     }
     let account = Client::new(gateway.clone()).account(address)?;
     println!("address {}", account.address);
