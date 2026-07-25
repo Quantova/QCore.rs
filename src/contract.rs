@@ -1,3 +1,6 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 use qtv_account::{account_seed, SCHEME_LATTICE};
 use qtv_crypto::{ml_dsa, sha3};
 

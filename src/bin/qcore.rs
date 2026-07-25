@@ -1,3 +1,6 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 use qcore::{
     account_address, account_public_key, generate_seed, mnemonic_from_seed, valid_address, Client,
     Submit, TxStatus,

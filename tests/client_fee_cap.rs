@@ -1,3 +1,6 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! The convenience client must never sign a transfer whose fee the gateway reports above the
 
 #![cfg(feature = "client")]

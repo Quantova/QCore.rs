@@ -1,3 +1,6 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! The JavaScript core is generated over this Rust core, so the two must agree byte for byte on
 
 use qcore::{account_address, chain_id_from_name, sign_call, LOCAL_CHAIN_ID, SEED_LEN};
