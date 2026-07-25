@@ -12,11 +12,6 @@ all-features = true
 [bans]
 multiple-versions = "deny"
 wildcards = "allow"
-# qtv-crypto is pulled by commit directly and by the same commit v0.3.0 tag through the
-# Quantova-Chain crates, so it appears under two source specs that resolve to one commit.
-skip = [
-    { crate = "qtv-crypto" },
-]
 deny = [
     "k256",
     "ed25519-dalek",
