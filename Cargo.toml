@@ -31,7 +31,7 @@ qtv-account = { path = "../Quantova-Chain/crates/qtv-account" }
 qtv-tx = { path = "../Quantova-Chain/crates/qtv-tx" }
 qtv-codec = { path = "../Quantova-Chain/crates/qtv-codec" }
 qtv-idfmt = { path = "../Quantova-Chain/crates/qtv-idfmt" }
-qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "98860273eb291c211fa2dc24f9b63f18936f562c" }
+qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "4c0bdcb7dce9d2de6f9f510b0695377321076fef" }
 # The machine's own ABI: the verify region byte lengths, the scheme identifiers, and the
 # scalar slot key encoding, read as constants so the client never restates a size the machine
 # would then reject. Only the `abi` module is used, which is pure and compiles to WebAssembly.
