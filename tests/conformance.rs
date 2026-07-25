@@ -76,14 +76,16 @@ fn the_frozen_vectors_reproduce_from_the_signing_core() {
             nonce,
             meter_limit,
             fee,
+            chain_id,
         );
         assert_eq!(signed.from, text(v, "from"), "{name} from");
         assert_eq!(signed.tx_id, text(v, "tx_id"), "{name} transaction id");
         assert_eq!(hex(&signed.tx_bytes), text(v, "tx_bytes"), "{name} signed bytes");
 
         let lowered = target.to_ascii_lowercase();
-        let recased =
-            sign_payable_call(&seed, index, &lowered, args, value, nonce, meter_limit, fee);
+        let recased = sign_payable_call(
+            &seed, index, &lowered, args, value, nonce, meter_limit, fee, chain_id,
+        );
         assert_eq!(recased.tx_bytes, signed.tx_bytes, "{name} case holds the bytes");
         assert_eq!(recased.tx_id, signed.tx_id, "{name} case holds the id");
     }
