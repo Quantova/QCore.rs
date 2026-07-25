@@ -33,7 +33,16 @@ fn the_derived_addresses_match_the_qcore_js_vector() {
 fn the_transfer_body_reproduces_the_qcore_js_vector() {
     let seed = shared_seed();
     let target = account_address(&seed, 8);
-    let signed = sign_call(&seed, 7, &target, vec![0xde, 0xad, 0xbe, 0xef], 3, 21_000, 1_000_000);
+    let signed = sign_call(
+        &seed,
+        7,
+        &target,
+        vec![0xde, 0xad, 0xbe, 0xef],
+        3,
+        21_000,
+        1_000_000,
+        LOCAL_CHAIN_ID,
+    );
     let body_bytes = "20000000000000008c705c118414c1e32a977ca4ee36fc3f2888b67ec031596abf4ac70e5f5a14f00300000000000000085200000000000040420f000000000000000000000000002000000000000000ba83f436d6f46e181c3bae40ba4ffedb0f62e67cde1a0c558f459b996229593b0400000000000000deadbeef000000000000000098ba0ce08f27d0be";
     assert!(
         hex(&signed.tx_bytes).starts_with(body_bytes),
@@ -66,8 +75,8 @@ fn the_target_case_never_moves_the_signed_bytes() {
     let upper = account_address(&seed, 8);
     let lower = upper.to_ascii_lowercase();
     assert_ne!(upper, lower);
-    let signed_upper = sign_call(&seed, 7, &upper, vec![1, 2], 3, 21_000, 500);
-    let signed_lower = sign_call(&seed, 7, &lower, vec![1, 2], 3, 21_000, 500);
+    let signed_upper = sign_call(&seed, 7, &upper, vec![1, 2], 3, 21_000, 500, LOCAL_CHAIN_ID);
+    let signed_lower = sign_call(&seed, 7, &lower, vec![1, 2], 3, 21_000, 500, LOCAL_CHAIN_ID);
     assert_eq!(signed_upper.tx_bytes, signed_lower.tx_bytes);
     assert_eq!(signed_upper.tx_id, signed_lower.tx_id);
 }
