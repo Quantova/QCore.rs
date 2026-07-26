@@ -11,6 +11,7 @@ use json::{object, to_hex, Json};
 use qtv_account::derive;
 use qtv_codec::{to_bytes, Encoder};
 use qtv_tx::{sign, Body, Call};
+use zeroize::Zeroizing;
 
 pub use qtv_tx::{
     chain_id_from_name, LOCAL_CHAIN_ID, LOCAL_CHAIN_NAME, MAINNET_CHAIN_ID, MAINNET_CHAIN_NAME,
@@ -220,7 +221,7 @@ fn word_list() -> Vec<&'static str> {
 pub fn mnemonic_from_seed(seed: &[u8; SEED_LEN]) -> String {
     let words = word_list();
     let checksum = qtv_crypto::sha3::sha3_256(seed)[0];
-    let mut bits: Vec<u8> = Vec::with_capacity(SEED_LEN * 8 + 8);
+    let mut bits: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::with_capacity(SEED_LEN * 8 + 8));
     for &byte in seed.iter() {
         for shift in (0..8).rev() {
             bits.push((byte >> shift) & 1);
@@ -244,7 +245,7 @@ pub fn seed_from_mnemonic(phrase: &str) -> Result<[u8; SEED_LEN], String> {
     if entered.len() != 24 {
         return Err("a recovery phrase is twenty four words".to_string());
     }
-    let mut bits: Vec<u8> = Vec::with_capacity(24 * 11);
+    let mut bits: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::with_capacity(24 * 11));
     for word in &entered {
         let index = words
             .iter()
