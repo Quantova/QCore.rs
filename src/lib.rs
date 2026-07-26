@@ -498,9 +498,18 @@ mod client {
             if !valid_address(contract) {
                 return Err("the contract is not a Q1 address".to_string());
             }
+            let info = self.node_info()?;
+            if info.transfer_fee > max_fee {
+                return Err(format!(
+                    "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
+                    info.transfer_fee
+                ));
+            }
+            let chain_id = chain_id_from_name(&info.chain_id);
             let signer = contract::order_signer(owner_seed, owner_index);
             let nonce = self.contract_nonce(contract, &signer)?;
             let order = contract::build_signed_order_call(
+                chain_id,
                 contract,
                 selector,
                 layout,
@@ -509,16 +518,8 @@ mod client {
                 owner_index,
                 nonce,
             )?;
-            let info = self.node_info()?;
-            if info.transfer_fee > max_fee {
-                return Err(format!(
-                    "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
-                    info.transfer_fee
-                ));
-            }
             let caller = account_address(caller_seed, caller_index);
             let account = self.account(&caller)?;
-            let chain_id = chain_id_from_name(&info.chain_id);
             let signed = sign_call(
                 caller_seed,
                 caller_index,
@@ -552,12 +553,6 @@ mod client {
             if !valid_address(contract) {
                 return Err("the contract is not a Q1 address".to_string());
             }
-            let signer = contract::order_signer(owner_seed, owner_index);
-            let nonce = self.contract_nonce(contract, &signer)?;
-            let order = contract::build_typed_order_call(
-                contract, selector, scheme_off, ptr_off, region_off, fields, owner_seed, owner_index,
-                nonce,
-            )?;
             let info = self.node_info()?;
             if info.transfer_fee > max_fee {
                 return Err(format!(
@@ -565,9 +560,15 @@ mod client {
                     info.transfer_fee
                 ));
             }
+            let chain_id = chain_id_from_name(&info.chain_id);
+            let signer = contract::order_signer(owner_seed, owner_index);
+            let nonce = self.contract_nonce(contract, &signer)?;
+            let order = contract::build_typed_order_call(
+                chain_id, contract, selector, scheme_off, ptr_off, region_off, fields, owner_seed,
+                owner_index, nonce,
+            )?;
             let caller = account_address(caller_seed, caller_index);
             let account = self.account(&caller)?;
-            let chain_id = chain_id_from_name(&info.chain_id);
             let signed = sign_call(
                 caller_seed,
                 caller_index,

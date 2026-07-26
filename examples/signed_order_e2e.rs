@@ -38,7 +38,7 @@ fn run() -> Result<(), String> {
     let step: u64 = args.next().map(|s| s.parse().unwrap_or(5)).unwrap_or(5);
 
     let client = Client::new(url);
-    let layout = OrderLayout::new(72, 80, vec![88]);
+    let layout = OrderLayout::new(80, 88, vec![96]);
 
     let info = client.node_info()?;
     let fee = info.transfer_fee;
