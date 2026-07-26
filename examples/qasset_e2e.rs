@@ -187,7 +187,7 @@ fn run() -> Result<(), String> {
     println!("[non-owner mint] PROOF: refused, supply unchanged at {supply_w} and no event");
 
     let replay_caller = client.account(&owner)?;
-    let replay = qcore::sign_call(&DEPLOYER_SEED, 0, &contract, mint_order.call_args.clone(), replay_caller.nonce, METER, fee, qcore::chain_id_from_name(&info.chain_id));
+    let replay = qcore::sign_call(&DEPLOYER_SEED, 0, &contract, mint_order.call_args.clone(), replay_caller.nonce, METER, fee, qcore::chain_id_from_name(&info.chain_id))?;
     accepted(&client.submit(&replay.tx_bytes)?, "replay")?;
     let replay_height = poll_finality(&client, &replay.tx_id)?;
     println!("\n[replay] resubmitted the owner's nonce {} order as tx {}, finalised at height {replay_height}", mint_order.nonce, replay.tx_id);

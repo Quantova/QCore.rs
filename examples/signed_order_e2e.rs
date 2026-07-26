@@ -163,7 +163,7 @@ fn run() -> Result<(), String> {
         METER,
         fee,
         qcore::chain_id_from_name(&info.chain_id),
-    );
+    )?;
     let replay_out = client.submit(&replay.tx_bytes)?;
     accepted(&replay_out, "replay")?;
     println!("\n[replay] resubmitted the owner's nonce {} order as tx {}", order.nonce, replay.tx_id);

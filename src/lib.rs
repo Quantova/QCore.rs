@@ -70,7 +70,10 @@ pub fn sign_payable_call(
     meter_limit: u64,
     fee: u128,
     chain_id: u64,
-) -> SignedTransfer {
+) -> Result<SignedTransfer, String> {
+    if !valid_address(target) {
+        return Err("the target is not a Q1 address".to_string());
+    }
     let sender = derive(seed, index);
     let call = Call::new(target.to_string(), args);
     let body = Body::with_context(
@@ -83,11 +86,11 @@ pub fn sign_payable_call(
         chain_id,
     );
     let wrapper = sign(&sender, &body);
-    SignedTransfer {
+    Ok(SignedTransfer {
         from: sender.address(),
         tx_id: wrapper.id(),
         tx_bytes: to_bytes(&wrapper),
-    }
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -100,7 +103,7 @@ pub fn sign_call(
     meter_limit: u64,
     fee: u128,
     chain_id: u64,
-) -> SignedTransfer {
+) -> Result<SignedTransfer, String> {
     sign_payable_call(seed, index, target, args, 0, nonce, meter_limit, fee, chain_id)
 }
 
@@ -112,7 +115,7 @@ pub fn sign_transfer(
     nonce: u64,
     fee: u128,
     chain_id: u64,
-) -> SignedTransfer {
+) -> Result<SignedTransfer, String> {
     let mut encoder = Encoder::new();
     encoder.put_u64(amount);
     sign_call(seed, index, to, encoder.into_bytes(), nonce, NATIVE_TRANSFER_METER, fee, chain_id)
@@ -124,7 +127,7 @@ pub fn sign_register(
     nonce: u64,
     fee: u128,
     chain_id: u64,
-) -> SignedTransfer {
+) -> Result<SignedTransfer, String> {
     let public_key = account_public_key(seed, index);
     sign_call(
         seed,
@@ -404,7 +407,7 @@ mod client {
             let account = self.account(&sender)?;
             let chain_id = chain_id_from_name(&info.chain_id);
             let signed =
-                sign_transfer(seed, index, to, amount, account.nonce, info.transfer_fee, chain_id);
+                sign_transfer(seed, index, to, amount, account.nonce, info.transfer_fee, chain_id)?;
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome))
         }
@@ -455,7 +458,7 @@ mod client {
                 meter_limit,
                 info.transfer_fee,
                 chain_id,
-            );
+            )?;
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome))
         }
@@ -525,7 +528,7 @@ mod client {
                 meter_limit,
                 info.transfer_fee,
                 chain_id,
-            );
+            )?;
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome, order))
         }
@@ -574,7 +577,7 @@ mod client {
                 meter_limit,
                 info.transfer_fee,
                 chain_id,
-            );
+            )?;
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome, order))
         }
@@ -610,7 +613,7 @@ mod client {
                 meter_limit,
                 info.transfer_fee,
                 chain_id,
-            );
+            )?;
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome, contract))
         }
@@ -641,7 +644,7 @@ mod client {
             let sender = account_address(seed, index);
             let account = self.account(&sender)?;
             let chain_id = chain_id_from_name(&info.chain_id);
-            let signed = sign_register(seed, index, account.nonce, info.transfer_fee, chain_id);
+            let signed = sign_register(seed, index, account.nonce, info.transfer_fee, chain_id)?;
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome))
         }
@@ -656,7 +659,7 @@ mod tests {
     fn a_transfer_is_a_call_that_encodes_the_amount() {
         let seed = [7u8; SEED_LEN];
         let to = account_address(&seed, 0);
-        let transfer = sign_transfer(&seed, 0, &to, 1000, 3, 500, LOCAL_CHAIN_ID);
+        let transfer = sign_transfer(&seed, 0, &to, 1000, 3, 500, LOCAL_CHAIN_ID).unwrap();
         let mut encoder = Encoder::new();
         encoder.put_u64(1000);
         let call = sign_call(
@@ -668,7 +671,8 @@ mod tests {
             NATIVE_TRANSFER_METER,
             500,
             LOCAL_CHAIN_ID,
-        );
+        )
+        .unwrap();
         assert_eq!(transfer.tx_bytes, call.tx_bytes);
         assert_eq!(transfer.tx_id, call.tx_id);
     }
@@ -684,13 +688,15 @@ mod tests {
     fn a_payable_call_binds_the_value_into_the_signature() {
         let seed = [7u8; SEED_LEN];
         let target = account_address(&seed, 1);
-        let free = sign_call(&seed, 0, &target, vec![1, 2, 3], 5, 1210, 500, LOCAL_CHAIN_ID);
+        let free = sign_call(&seed, 0, &target, vec![1, 2, 3], 5, 1210, 500, LOCAL_CHAIN_ID).unwrap();
         let payable_zero =
-            sign_payable_call(&seed, 0, &target, vec![1, 2, 3], 0, 5, 1210, 500, LOCAL_CHAIN_ID);
+            sign_payable_call(&seed, 0, &target, vec![1, 2, 3], 0, 5, 1210, 500, LOCAL_CHAIN_ID)
+                .unwrap();
         assert_eq!(free.tx_bytes, payable_zero.tx_bytes);
         assert_eq!(free.tx_id, payable_zero.tx_id);
         let funded =
-            sign_payable_call(&seed, 0, &target, vec![1, 2, 3], 1000, 5, 1210, 500, LOCAL_CHAIN_ID);
+            sign_payable_call(&seed, 0, &target, vec![1, 2, 3], 1000, 5, 1210, 500, LOCAL_CHAIN_ID)
+                .unwrap();
         assert_ne!(funded.tx_bytes, free.tx_bytes);
         assert_ne!(funded.tx_id, free.tx_id);
     }
@@ -705,7 +711,8 @@ mod tests {
         let wrapper = sign(&sender, &body);
         assert!(qtv_tx::verify(&wrapper, sender.public_key()));
         let signed =
-            sign_payable_call(&seed, 0, &target, vec![9, 9, 9], 2500, 4, 1210, 750, LOCAL_CHAIN_ID);
+            sign_payable_call(&seed, 0, &target, vec![9, 9, 9], 2500, 4, 1210, 750, LOCAL_CHAIN_ID)
+                .unwrap();
         assert_eq!(signed.tx_bytes, to_bytes(&wrapper));
         assert_eq!(signed.tx_id, wrapper.id());
     }
@@ -716,8 +723,8 @@ mod tests {
         let target = account_address(&seed, 1);
         let lowered = target.to_ascii_lowercase();
         assert_ne!(target, lowered);
-        let upper = sign_call(&seed, 0, &target, vec![4, 2], 9, 1210, 500, LOCAL_CHAIN_ID);
-        let lower = sign_call(&seed, 0, &lowered, vec![4, 2], 9, 1210, 500, LOCAL_CHAIN_ID);
+        let upper = sign_call(&seed, 0, &target, vec![4, 2], 9, 1210, 500, LOCAL_CHAIN_ID).unwrap();
+        let lower = sign_call(&seed, 0, &lowered, vec![4, 2], 9, 1210, 500, LOCAL_CHAIN_ID).unwrap();
         assert_eq!(upper.tx_bytes, lower.tx_bytes);
         assert_eq!(upper.tx_id, lower.tx_id);
     }
@@ -743,6 +750,16 @@ mod tests {
         assert!(valid_address(&address));
         assert!(!valid_address("not an address"));
         assert!(!valid_address(""));
+    }
+
+    #[test]
+    fn a_bad_target_is_an_error_not_a_panic() {
+        let seed = [7u8; SEED_LEN];
+        assert!(sign_transfer(&seed, 0, "not an address", 1000, 0, 500, LOCAL_CHAIN_ID).is_err());
+        assert!(sign_call(&seed, 0, "", vec![1, 2], 0, 1210, 500, LOCAL_CHAIN_ID).is_err());
+        assert!(
+            sign_payable_call(&seed, 0, "Q1zzz", vec![1], 5, 0, 1210, 500, LOCAL_CHAIN_ID).is_err()
+        );
     }
 
     #[test]
