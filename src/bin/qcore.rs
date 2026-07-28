@@ -49,14 +49,14 @@ fn cmd_new() -> Result<(), String> {
 }
 
 fn cmd_address(args: &[String]) -> Result<(), String> {
-    let seed = parse_seed(args.first().ok_or("usage: qcore address <seed-hex> [index]")?)?;
+    let seed = read_seed(args.first().ok_or("usage: qcore address <seed> [index]")?)?;
     let index = parse_index(args.get(1))?;
     println!("{}", account_address(&seed, index));
     Ok(())
 }
 
 fn cmd_pubkey(args: &[String]) -> Result<(), String> {
-    let seed = parse_seed(args.first().ok_or("usage: qcore pubkey <seed-hex> [index]")?)?;
+    let seed = read_seed(args.first().ok_or("usage: qcore pubkey <seed> [index]")?)?;
     let index = parse_index(args.get(1))?;
     println!("scheme  1");
     println!("pubkey  {}", to_hex(&account_public_key(&seed, index)));
@@ -78,7 +78,7 @@ fn cmd_register(args: &[String]) -> Result<(), String> {
     if args.len() < 3 {
         return Err("usage: qcore register <gateway-url> <seed-hex> <max-fee>".to_string());
     }
-    let seed = parse_seed(&args[1])?;
+    let seed = read_seed(&args[1])?;
     // The ceiling is the caller's own, never the gateway's reported fee. Passing the reported fee as
     // the ceiling would compare the fee against itself and sign whatever the gateway asks, which lets
     // a hostile gateway inflate the registration fee to drain the account.
@@ -115,7 +115,7 @@ fn cmd_send(args: &[String]) -> Result<(), String> {
             "usage: qcore send <gateway-url> <seed-hex> <to> <amount> <max-fee>".to_string(),
         );
     }
-    let seed = parse_seed(&args[1])?;
+    let seed = read_seed(&args[1])?;
     let to = &args[2];
     let amount: u64 = args[3].parse().map_err(|_| "the amount is not a number")?;
     let max_fee: u128 = args[4].parse().map_err(|_| "the max fee is not a number")?;
@@ -157,10 +157,38 @@ fn print_usage() {
     println!("  qcore balance <gateway-url> <address>                 an account balance and nonce");
     println!("  qcore send <gateway-url> <seed-hex> <to> <amount> <max-fee>   sign and submit a transfer");
     println!("  qcore status <gateway-url> <tx-id>                    where a transaction is");
+    println!();
+    println!("A <seed> can be the hex directly, @file to read it from a file, - to read it from");
+    println!("stdin, or env:VAR to read it from an environment variable. Prefer the last three so");
+    println!("the seed never appears in the process list or your shell history.");
 }
 
 fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn read_seed(source: &str) -> Result<[u8; 32], String> {
+    // Resolve the seed from a safe source so it need not sit in argv, where the process list and
+    // shell history would expose it. @file reads it from a file, - reads a line from stdin, env:VAR
+    // reads it from an environment variable, and a bare value is still accepted with a warning.
+    let hex = if let Some(var) = source.strip_prefix("env:") {
+        std::env::var(var).map_err(|_| format!("the environment variable {var} is not set"))?
+    } else if let Some(path) = source.strip_prefix('@') {
+        std::fs::read_to_string(path).map_err(|e| format!("reading the seed file {path}: {e}"))?
+    } else if source == "-" {
+        let mut line = String::new();
+        std::io::stdin()
+            .read_line(&mut line)
+            .map_err(|e| format!("reading the seed from stdin: {e}"))?;
+        line
+    } else {
+        eprintln!(
+            "warning: a seed on the command line is visible to other users through the process \
+             list and shell history; prefer @file, - for stdin, or env:VAR"
+        );
+        source.to_string()
+    };
+    parse_seed(hex.trim())
 }
 
 fn parse_seed(hex: &str) -> Result<[u8; 32], String> {
