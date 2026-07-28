@@ -40,7 +40,7 @@ pub fn signer_address(scheme: u8, public_key: &[u8]) -> [u8; 32] {
 }
 
 pub fn order_signer(owner_seed: &[u8; crate::SEED_LEN], owner_index: u64) -> [u8; 32] {
-    let seed = account_seed(owner_seed, SCHEME_LATTICE, owner_index);
+    let seed = Zeroizing::new(account_seed(owner_seed, SCHEME_LATTICE, owner_index));
     let (public_key, secret) = ml_dsa::keygen(&seed);
     let _secret = Zeroizing::new(secret);
     signer_address(SCHEME_LATTICE, &public_key)
@@ -248,7 +248,7 @@ pub fn build_typed_order_call(
 ) -> Result<SignedOrderCall, String> {
     let contract_id = contract_id(contract)?;
 
-    let seed = account_seed(owner_seed, SCHEME_LATTICE, owner_index);
+    let seed = Zeroizing::new(account_seed(owner_seed, SCHEME_LATTICE, owner_index));
     let (public_key, secret) = ml_dsa::keygen(&seed);
     let secret = Zeroizing::new(secret);
     debug_assert_eq!(
