@@ -75,13 +75,15 @@ fn cmd_info(args: &[String]) -> Result<(), String> {
 }
 
 fn cmd_register(args: &[String]) -> Result<(), String> {
-    if args.len() < 2 {
-        return Err("usage: qcore register <gateway-url> <seed-hex>".to_string());
+    if args.len() < 3 {
+        return Err("usage: qcore register <gateway-url> <seed-hex> <max-fee>".to_string());
     }
     let seed = parse_seed(&args[1])?;
-    let client = Client::new(args[0].clone());
-    let info = client.node_info()?;
-    let (_signed, outcome) = client.register(&seed, 0, info.transfer_fee)?;
+    // The ceiling is the caller's own, never the gateway's reported fee. Passing the reported fee as
+    // the ceiling would compare the fee against itself and sign whatever the gateway asks, which lets
+    // a hostile gateway inflate the registration fee to drain the account.
+    let max_fee: u128 = args[2].parse().map_err(|_| "the max fee is not a number")?;
+    let (_signed, outcome) = Client::new(args[0].clone()).register(&seed, 0, max_fee)?;
     match outcome {
         Submit::Accepted { state, tx_id } => {
             println!("registered {tx_id}");
@@ -151,7 +153,7 @@ fn print_usage() {
     println!("  qcore address <seed-hex> [index]                      the address for a seed and index");
     println!("  qcore pubkey <seed-hex> [index]                       the scheme, public key, and address, for genesis");
     println!("  qcore info <gateway-url>                              the chain id, height, and fee");
-    println!("  qcore register <gateway-url> <seed-hex>               register a funded account's key so it can send");
+    println!("  qcore register <gateway-url> <seed-hex> <max-fee>     register a funded account's key so it can send");
     println!("  qcore balance <gateway-url> <address>                 an account balance and nonce");
     println!("  qcore send <gateway-url> <seed-hex> <to> <amount> <max-fee>   sign and submit a transfer");
     println!("  qcore status <gateway-url> <tx-id>                    where a transaction is");
