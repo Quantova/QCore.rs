@@ -1,13 +1,8 @@
 # Copyright 2026 Quantova Inc
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 
-# Quantova classical-crypto deny-list.
 #
-# POLICY-crypto.md (Quantova-Specs) is the supreme law; this file is its machine-readable form.
-# Enforced in EVERY repo except Q-Oracle. Run `cargo deny check` before every PR; CI runs it too.
 #
-# Classical cryptography is unrepresentable: these crates are banned anywhere in the dependency tree,
-# INCLUDING transitive and dev-dependencies. No workarounds, no test-only exceptions, no feature flags.
 
 [graph]
 all-features = true
