@@ -17,12 +17,15 @@ const TRANSFER_SELECTOR: [u8; 4] = [0xb8, 0x4d, 0xbd, 0x2c];
 const MINTED_SELECTOR: [u8; 4] = [0xaf, 0x05, 0xf8, 0x0a];
 const TRANSFERRED_SELECTOR: [u8; 4] = [0xd2, 0x63, 0xee, 0x7a];
 
-const MINT_TO_OFF: u64 = 72;
-const MINT_SCHEME_OFF: u64 = 104;
-const MINT_PTR_OFF: u64 = 112;
-const MINT_AMOUNT_OFF: u64 = 120;
-const XFER_TO_OFF: u64 = 72;
-const XFER_AMOUNT_OFF: u64 = 104;
+// Caller args begin at byte 80, past the 80 byte host context.
+const MINT_TO_OFF: u64 = 80;
+const MINT_SCHEME_OFF: u64 = 112;
+const MINT_PTR_OFF: u64 = 120;
+const MINT_AMOUNT_OFF: u64 = 128;
+// amount is a u128: low word then high word.
+const MINT_AMOUNT_HI_OFF: u64 = MINT_AMOUNT_OFF + 8;
+const XFER_TO_OFF: u64 = 80;
+const XFER_AMOUNT_OFF: u64 = 112;
 
 const SUPPLY_SLOT: u64 = 4;
 const BAL_BASE: u64 = 1 << 40;
@@ -103,6 +106,7 @@ fn run() -> Result<(), String> {
         REGION_OFF,
         &[
             FieldArg { offset: MINT_AMOUNT_OFF, value: FieldValue::Word(mint_amount) },
+            FieldArg { offset: MINT_AMOUNT_HI_OFF, value: FieldValue::Word(0) },
             FieldArg { offset: MINT_TO_OFF, value: FieldValue::Address(owner_id) },
         ],
         &DEPLOYER_SEED,
@@ -166,6 +170,7 @@ fn run() -> Result<(), String> {
         REGION_OFF,
         &[
             FieldArg { offset: MINT_AMOUNT_OFF, value: FieldValue::Word(mint_amount) },
+            FieldArg { offset: MINT_AMOUNT_HI_OFF, value: FieldValue::Word(0) },
             FieldArg { offset: MINT_TO_OFF, value: FieldValue::Address(holder2_id) },
         ],
         &STRANGER_SEED,
