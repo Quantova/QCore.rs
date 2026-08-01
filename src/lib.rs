@@ -20,6 +20,8 @@ pub use qtv_tx::{
 
 pub const SEED_LEN: usize = 32;
 
+pub const ADDRESS_PAYLOAD_LEN: usize = 32;
+
 pub const NATIVE_TRANSFER_METER: u64 = 1_210;
 
 pub const DENOMINATION: &str = "Quon";
@@ -267,7 +269,7 @@ fn field_u8(v: &Json, key: &str) -> Result<u8, String> {
 }
 
 pub fn valid_address(address: &str) -> bool {
-    qtv_idfmt::parse_address(address).is_ok()
+    matches!(qtv_idfmt::parse_address(address), Ok(payload) if payload.len() == ADDRESS_PAYLOAD_LEN)
 }
 
 fn word_list() -> Vec<&'static str> {
@@ -882,6 +884,24 @@ mod tests {
         assert!(valid_address(&address));
         assert!(!valid_address("not an address"));
         assert!(!valid_address(""));
+    }
+
+    #[test]
+    fn valid_address_rejects_a_payload_wider_than_the_canonical_address() {
+        let canonical = account_address(&[7u8; SEED_LEN], 0);
+        assert_eq!(qtv_idfmt::parse_address(&canonical).unwrap().len(), ADDRESS_PAYLOAD_LEN);
+        let over_wide = qtv_idfmt::render_address(&[0x11u8; ADDRESS_PAYLOAD_LEN + 1]).unwrap();
+        assert!(qtv_idfmt::parse_address(&over_wide).is_ok(), "the wide form is still a well formed bech32m string");
+        assert!(!valid_address(&over_wide), "a payload wider than the canonical address is not a Q1 address");
+        let far_wider = qtv_idfmt::render_address(&[0x11u8; ADDRESS_PAYLOAD_LEN + 8]).unwrap();
+        assert!(!valid_address(&far_wider));
+        assert!(
+            sign_transfer(&[7u8; SEED_LEN], 0, &over_wide, 1000, 0, 500, LOCAL_CHAIN_ID).is_err(),
+            "a transfer to an over wide target is refused before signing"
+        );
+        assert!(
+            sign_call(&[7u8; SEED_LEN], 0, &over_wide, vec![1, 2], 0, 1210, 500, LOCAL_CHAIN_ID).is_err()
+        );
     }
 
     #[test]
