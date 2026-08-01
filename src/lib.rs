@@ -22,6 +22,59 @@ pub const SEED_LEN: usize = 32;
 
 pub const NATIVE_TRANSFER_METER: u64 = 1_210;
 
+pub const DENOMINATION: &str = "Quon";
+
+pub const DECIMALS: u8 = 6;
+
+#[derive(Debug, Clone)]
+pub struct Network {
+    pub name: String,
+    pub chain_id: Option<String>,
+    pub rpc_url: Option<String>,
+    pub explorer_url: Option<String>,
+    pub denomination: String,
+    pub decimals: u8,
+    pub is_mainnet: bool,
+}
+
+impl Network {
+    pub fn testnet() -> Network {
+        Network {
+            name: "testnet".to_string(),
+            chain_id: Some("Q-test-net-1".to_string()),
+            rpc_url: Some("https://rpc-testnet.quantova.org".to_string()),
+            explorer_url: Some("https://qvmscan.io".to_string()),
+            denomination: DENOMINATION.to_string(),
+            decimals: DECIMALS,
+            is_mainnet: false,
+        }
+    }
+
+    pub fn mainnet() -> Network {
+        Network {
+            name: "mainnet".to_string(),
+            chain_id: Some("Q-main-net-1".to_string()),
+            rpc_url: None,
+            explorer_url: Some("https://qvmscan.io".to_string()),
+            denomination: DENOMINATION.to_string(),
+            decimals: DECIMALS,
+            is_mainnet: true,
+        }
+    }
+
+    pub fn for_url(base: impl Into<String>) -> Network {
+        Network {
+            name: "custom".to_string(),
+            chain_id: None,
+            rpc_url: Some(base.into()),
+            explorer_url: None,
+            denomination: DENOMINATION.to_string(),
+            decimals: DECIMALS,
+            is_mainnet: false,
+        }
+    }
+}
+
 pub fn account_address(seed: &[u8; SEED_LEN], index: u64) -> String {
     derive(seed, index).address()
 }
@@ -353,11 +406,83 @@ mod client {
 
     pub struct Client {
         base: String,
+        network: Network,
+        acknowledge_mainnet: bool,
+    }
+
+    fn normalize_base(base: String) -> String {
+        base.trim_end_matches('/').to_string()
     }
 
     impl Client {
         pub fn new(base: impl Into<String>) -> Client {
-            Client { base: base.into() }
+            let base = base.into();
+            let network = Network::for_url(base.clone());
+            Client {
+                base: normalize_base(base),
+                network,
+                acknowledge_mainnet: false,
+            }
+        }
+
+        pub fn for_network(network: Network, acknowledge_mainnet: bool) -> Result<Client, String> {
+            let base = network.rpc_url.clone().ok_or_else(|| {
+                format!(
+                    "the {} network has no rpc endpoint yet, pass the endpoint explicitly with Client::with_network",
+                    network.name
+                )
+            })?;
+            if network.is_mainnet && !acknowledge_mainnet {
+                return Err("refusing to open a mainnet client without acknowledging it, a mainnet transaction moves real value so the network must be chosen on purpose".to_string());
+            }
+            Ok(Client {
+                base: normalize_base(base),
+                network,
+                acknowledge_mainnet,
+            })
+        }
+
+        pub fn with_network(
+            base: impl Into<String>,
+            network: Network,
+            acknowledge_mainnet: bool,
+        ) -> Client {
+            Client {
+                base: normalize_base(base.into()),
+                network,
+                acknowledge_mainnet,
+            }
+        }
+
+        pub fn network(&self) -> &Network {
+            &self.network
+        }
+
+        fn guard_mainnet(&self) -> Result<(), String> {
+            if self.network.is_mainnet && !self.acknowledge_mainnet {
+                let label = self.network.chain_id.clone().unwrap_or_default();
+                return Err(format!(
+                    "refusing to sign for the mainnet network {label} without acknowledging it, acknowledge mainnet when you mean to move real value"
+                ));
+            }
+            Ok(())
+        }
+
+        fn signing_chain_id(&self, info: &NodeInfo) -> Result<u64, String> {
+            let name = &info.chain_id;
+            if name.is_empty() {
+                return Err(
+                    "the gateway did not report a chain id to bind the signature to".to_string(),
+                );
+            }
+            if let Some(configured) = &self.network.chain_id {
+                if name != configured {
+                    return Err(format!(
+                        "the gateway reports chain {name} but this client is configured for {configured}, refusing to sign a transaction that would be valid on a network you did not choose"
+                    ));
+                }
+            }
+            Ok(chain_id_from_name(name))
         }
 
         fn rpc(&self, method: &str, body: String) -> Result<String, String> {
@@ -397,6 +522,7 @@ mod client {
                 return Err("the recipient is not a Q1 address".to_string());
             }
             let info = self.node_info()?;
+            self.guard_mainnet()?;
             if info.transfer_fee > max_fee {
                 return Err(format!(
                     "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
@@ -405,7 +531,7 @@ mod client {
             }
             let sender = account_address(seed, index);
             let account = self.account(&sender)?;
-            let chain_id = chain_id_from_name(&info.chain_id);
+            let chain_id = self.signing_chain_id(&info)?;
             let signed =
                 sign_transfer(seed, index, to, amount, account.nonce, info.transfer_fee, chain_id)?;
             let outcome = self.submit(&signed.tx_bytes)?;
@@ -439,6 +565,7 @@ mod client {
                 return Err("the target is not a Q1 address".to_string());
             }
             let info = self.node_info()?;
+            self.guard_mainnet()?;
             if info.transfer_fee > max_fee {
                 return Err(format!(
                     "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
@@ -447,7 +574,7 @@ mod client {
             }
             let sender = account_address(seed, index);
             let account = self.account(&sender)?;
-            let chain_id = chain_id_from_name(&info.chain_id);
+            let chain_id = self.signing_chain_id(&info)?;
             let signed = sign_payable_call(
                 seed,
                 index,
@@ -499,13 +626,14 @@ mod client {
                 return Err("the contract is not a Q1 address".to_string());
             }
             let info = self.node_info()?;
+            self.guard_mainnet()?;
             if info.transfer_fee > max_fee {
                 return Err(format!(
                     "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
                     info.transfer_fee
                 ));
             }
-            let chain_id = chain_id_from_name(&info.chain_id);
+            let chain_id = self.signing_chain_id(&info)?;
             let signer = contract::order_signer(owner_seed, owner_index);
             let nonce = self.contract_nonce(contract, &signer)?;
             let order = contract::build_signed_order_call(
@@ -554,13 +682,14 @@ mod client {
                 return Err("the contract is not a Q1 address".to_string());
             }
             let info = self.node_info()?;
+            self.guard_mainnet()?;
             if info.transfer_fee > max_fee {
                 return Err(format!(
                     "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
                     info.transfer_fee
                 ));
             }
-            let chain_id = chain_id_from_name(&info.chain_id);
+            let chain_id = self.signing_chain_id(&info)?;
             let signer = contract::order_signer(owner_seed, owner_index);
             let nonce = self.contract_nonce(contract, &signer)?;
             let order = contract::build_typed_order_call(
@@ -593,6 +722,7 @@ mod client {
             max_fee: u128,
         ) -> Result<(SignedTransfer, Submit, String), String> {
             let info = self.node_info()?;
+            self.guard_mainnet()?;
             if info.transfer_fee > max_fee {
                 return Err(format!(
                     "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
@@ -604,7 +734,7 @@ mod client {
             let args = contract::build_deploy_call(container, params);
             let contract = contract_address(&deployer, account.nonce)
                 .ok_or("the deployer is not a Q1 address")?;
-            let chain_id = chain_id_from_name(&info.chain_id);
+            let chain_id = self.signing_chain_id(&info)?;
             let signed = sign_call(
                 seed,
                 index,
@@ -636,6 +766,7 @@ mod client {
             max_fee: u128,
         ) -> Result<(SignedTransfer, Submit), String> {
             let info = self.node_info()?;
+            self.guard_mainnet()?;
             if info.transfer_fee > max_fee {
                 return Err(format!(
                     "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
@@ -644,7 +775,7 @@ mod client {
             }
             let sender = account_address(seed, index);
             let account = self.account(&sender)?;
-            let chain_id = chain_id_from_name(&info.chain_id);
+            let chain_id = self.signing_chain_id(&info)?;
             let signed = sign_register(seed, index, account.nonce, info.transfer_fee, chain_id)?;
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome))

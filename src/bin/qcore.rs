@@ -3,7 +3,7 @@
 
 use qcore::{
     account_address, account_public_key, generate_seed, mnemonic_from_seed, valid_address, Client,
-    Submit, TxStatus,
+    Network, Submit, TxStatus,
 };
 
 fn main() {
@@ -75,15 +75,18 @@ fn cmd_info(args: &[String]) -> Result<(), String> {
 }
 
 fn cmd_register(args: &[String]) -> Result<(), String> {
+    let (mainnet, args) = take_flag(args, "--mainnet");
     if args.len() < 3 {
-        return Err("usage: qcore register <gateway-url> <seed-hex> <max-fee>".to_string());
+        return Err(
+            "usage: qcore register [--mainnet] <gateway-url> <seed-hex> <max-fee>".to_string(),
+        );
     }
     let seed = read_seed(&args[1])?;
     // The ceiling is the caller's own, never the gateway's reported fee. Passing the reported fee as
     // the ceiling would compare the fee against itself and sign whatever the gateway asks, which lets
     // a hostile gateway inflate the registration fee to drain the account.
     let max_fee: u128 = args[2].parse().map_err(|_| "the max fee is not a number")?;
-    let (_signed, outcome) = Client::new(args[0].clone()).register(&seed, 0, max_fee)?;
+    let (_signed, outcome) = build_client(&args[0], mainnet).register(&seed, 0, max_fee)?;
     match outcome {
         Submit::Accepted { state, tx_id } => {
             println!("registered {tx_id}");
@@ -110,16 +113,18 @@ fn cmd_balance(args: &[String]) -> Result<(), String> {
 }
 
 fn cmd_send(args: &[String]) -> Result<(), String> {
+    let (mainnet, args) = take_flag(args, "--mainnet");
     if args.len() < 5 {
         return Err(
-            "usage: qcore send <gateway-url> <seed-hex> <to> <amount> <max-fee>".to_string(),
+            "usage: qcore send [--mainnet] <gateway-url> <seed-hex> <to> <amount> <max-fee>"
+                .to_string(),
         );
     }
     let seed = read_seed(&args[1])?;
     let to = &args[2];
     let amount: u64 = args[3].parse().map_err(|_| "the amount is not a number")?;
     let max_fee: u128 = args[4].parse().map_err(|_| "the max fee is not a number")?;
-    let (_signed, outcome) = Client::new(args[0].clone()).transfer(&seed, 0, to, amount, max_fee)?;
+    let (_signed, outcome) = build_client(&args[0], mainnet).transfer(&seed, 0, to, amount, max_fee)?;
     match outcome {
         Submit::Accepted { state, tx_id } => {
             println!("submitted {tx_id}");
@@ -153,14 +158,44 @@ fn print_usage() {
     println!("  qcore address <seed-hex> [index]                      the address for a seed and index");
     println!("  qcore pubkey <seed-hex> [index]                       the scheme, public key, and address, for genesis");
     println!("  qcore info <gateway-url>                              the chain id, height, and fee");
-    println!("  qcore register <gateway-url> <seed-hex> <max-fee>     register a funded account's key so it can send");
+    println!("  qcore register [--mainnet] <gateway-url> <seed-hex> <max-fee>     register a funded account's key so it can send");
     println!("  qcore balance <gateway-url> <address>                 an account balance and nonce");
-    println!("  qcore send <gateway-url> <seed-hex> <to> <amount> <max-fee>   sign and submit a transfer");
+    println!("  qcore send [--mainnet] <gateway-url> <seed-hex> <to> <amount> <max-fee>   sign and submit a transfer");
     println!("  qcore status <gateway-url> <tx-id>                    where a transaction is");
     println!();
     println!("A <seed> can be the hex directly, @file to read it from a file, - to read it from");
     println!("stdin, or env:VAR to read it from an environment variable. Prefer the last three so");
     println!("the seed never appears in the process list or your shell history.");
+    println!();
+    println!("Pass --mainnet on a signing command to bind the client to the Q-main-net-1 network and");
+    println!("acknowledge that the transaction moves real value; the command then refuses to sign if");
+    println!("the gateway does not serve that network. Without it a signing command follows whatever");
+    println!("network the gateway names and does not prompt.");
+}
+
+fn take_flag(args: &[String], flag: &str) -> (bool, Vec<String>) {
+    let mut present = false;
+    let kept = args
+        .iter()
+        .filter(|a| {
+            if a.as_str() == flag {
+                present = true;
+                false
+            } else {
+                true
+            }
+        })
+        .cloned()
+        .collect();
+    (present, kept)
+}
+
+fn build_client(gateway: &str, mainnet: bool) -> Client {
+    if mainnet {
+        Client::with_network(gateway.to_string(), Network::mainnet(), true)
+    } else {
+        Client::new(gateway.to_string())
+    }
 }
 
 fn to_hex(bytes: &[u8]) -> String {
