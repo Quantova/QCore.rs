@@ -40,7 +40,7 @@ fn run(args: &[String]) -> Result<(), String> {
 
 fn cmd_new() -> Result<(), String> {
     let seed = generate_seed()?;
-    println!("seed    {}", to_hex(&seed));
+    println!("seed    {}", to_hex(&seed[..]));
     println!("phrase  {}", mnemonic_from_seed(&seed));
     println!("address {}", account_address(&seed, 0));
     println!();
