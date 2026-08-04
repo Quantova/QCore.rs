@@ -297,7 +297,7 @@ pub fn mnemonic_from_seed(seed: &[u8; SEED_LEN]) -> String {
         .join(" ")
 }
 
-pub fn seed_from_mnemonic(phrase: &str) -> Result<[u8; SEED_LEN], String> {
+pub fn seed_from_mnemonic(phrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>, String> {
     let words = word_list();
     let entered: Vec<&str> = phrase.split_whitespace().collect();
     if entered.len() != 24 {
@@ -313,14 +313,14 @@ pub fn seed_from_mnemonic(phrase: &str) -> Result<[u8; SEED_LEN], String> {
             bits.push(((index >> shift) & 1) as u8);
         }
     }
-    let mut seed = [0u8; SEED_LEN];
+    let mut seed = Zeroizing::new([0u8; SEED_LEN]);
     for (i, byte) in seed.iter_mut().enumerate() {
         *byte = bits[i * 8..i * 8 + 8].iter().fold(0u8, |acc, &bit| (acc << 1) | bit);
     }
     let checksum = bits[SEED_LEN * 8..SEED_LEN * 8 + 8]
         .iter()
         .fold(0u8, |acc, &bit| (acc << 1) | bit);
-    if checksum != qtv_crypto::sha3::sha3_256(&seed)[0] {
+    if checksum != qtv_crypto::sha3::sha3_256(&*seed)[0] {
         return Err("the recovery phrase checksum does not match, check for a typo".to_string());
     }
     Ok(seed)
@@ -380,14 +380,14 @@ pub fn parse_transaction(response: &str) -> Result<TxStatus, String> {
 }
 
 #[cfg(feature = "client")]
-pub fn generate_seed() -> Result<[u8; SEED_LEN], String> {
+pub fn generate_seed() -> Result<Zeroizing<[u8; SEED_LEN]>, String> {
     #[cfg(unix)]
     {
         use std::io::Read;
         let mut file =
             std::fs::File::open("/dev/urandom").map_err(|e| format!("open the random source: {e}"))?;
-        let mut seed = [0u8; SEED_LEN];
-        file.read_exact(&mut seed)
+        let mut seed = Zeroizing::new([0u8; SEED_LEN]);
+        file.read_exact(&mut *seed)
             .map_err(|e| format!("read the random source: {e}"))?;
         Ok(seed)
     }
@@ -925,7 +925,7 @@ mod tests {
         let seed = [7u8; SEED_LEN];
         let phrase = mnemonic_from_seed(&seed);
         assert_eq!(phrase.split_whitespace().count(), 24);
-        assert_eq!(seed_from_mnemonic(&phrase).unwrap(), seed);
+        assert_eq!(*seed_from_mnemonic(&phrase).unwrap(), seed);
         assert_eq!(
             account_address(&seed_from_mnemonic(&phrase).unwrap(), 0),
             account_address(&seed, 0)
