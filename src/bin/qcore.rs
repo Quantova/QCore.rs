@@ -5,6 +5,7 @@ use qcore::{
     account_address, account_public_key, generate_seed, mnemonic_from_seed, valid_address, Client,
     Network, Submit, TxStatus,
 };
+use zeroize::Zeroizing;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -202,11 +203,11 @@ fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn read_seed(source: &str) -> Result<[u8; 32], String> {
+fn read_seed(source: &str) -> Result<Zeroizing<[u8; 32]>, String> {
     // Resolve the seed from a safe source so it need not sit in argv, where the process list and
     // shell history would expose it. @file reads it from a file, - reads a line from stdin, env:VAR
     // reads it from an environment variable, and a bare value is still accepted with a warning.
-    let hex = if let Some(var) = source.strip_prefix("env:") {
+    let hex: Zeroizing<String> = Zeroizing::new(if let Some(var) = source.strip_prefix("env:") {
         std::env::var(var).map_err(|_| format!("the environment variable {var} is not set"))?
     } else if let Some(path) = source.strip_prefix('@') {
         std::fs::read_to_string(path).map_err(|e| format!("reading the seed file {path}: {e}"))?
@@ -222,16 +223,16 @@ fn read_seed(source: &str) -> Result<[u8; 32], String> {
              list and shell history; prefer @file, - for stdin, or env:VAR"
         );
         source.to_string()
-    };
+    });
     parse_seed(hex.trim())
 }
 
-fn parse_seed(hex: &str) -> Result<[u8; 32], String> {
+fn parse_seed(hex: &str) -> Result<Zeroizing<[u8; 32]>, String> {
     let hex = hex.trim();
     if hex.len() != 64 {
         return Err("a seed is sixty four hex characters".to_string());
     }
-    let mut seed = [0u8; 32];
+    let mut seed = Zeroizing::new([0u8; 32]);
     for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
         let pair = std::str::from_utf8(chunk).map_err(|_| "the seed is not hex")?;
         seed[i] = u8::from_str_radix(pair, 16).map_err(|_| "the seed is not hex")?;
