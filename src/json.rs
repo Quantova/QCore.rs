@@ -1,6 +1,8 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use zeroize::Zeroize;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Json {
     Null,
@@ -348,9 +350,14 @@ pub fn from_hex(s: &str) -> Result<Vec<u8>, String> {
     let mut out = Vec::with_capacity(s.len() / 2);
     let mut i = 0;
     while i < bytes.len() {
-        let hi = nibble(bytes[i])?;
-        let lo = nibble(bytes[i + 1])?;
-        out.push((hi << 4) | lo);
+        let pair = match (nibble(bytes[i]), nibble(bytes[i + 1])) {
+            (Ok(hi), Ok(lo)) => (hi << 4) | lo,
+            (Err(e), _) | (_, Err(e)) => {
+                out.zeroize();
+                return Err(e);
+            }
+        };
+        out.push(pair);
         i += 2;
     }
     Ok(out)
