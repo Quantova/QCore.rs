@@ -3,7 +3,7 @@
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 
@@ -49,9 +49,15 @@ pub fn post(base: &str, path: &str, body: &str) -> Result<(u16, String), String>
         .write_all(request.as_bytes())
         .map_err(|e| format!("write: {e}"))?;
 
+    let deadline = Instant::now() + TIMEOUT;
     let mut raw = Vec::new();
     let mut buf = [0u8; 8192];
     loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|left| !left.is_zero())
+            .ok_or("the response timed out")?;
+        stream.set_read_timeout(Some(remaining)).ok();
         let n = stream.read(&mut buf).map_err(|e| format!("read: {e}"))?;
         if n == 0 {
             break;
