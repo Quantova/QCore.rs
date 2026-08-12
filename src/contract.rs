@@ -103,6 +103,17 @@ impl FieldValue {
             FieldValue::Name(_) => NAME_WINDOW as u64 + WORD,
         }
     }
+
+    // a label wider than the window cannot be placed without dropping bytes, so refuse it rather
+    // than sign a truncated name the caller never typed
+    fn ensure_fits(&self) -> Result<(), String> {
+        if let FieldValue::Name(label) = self {
+            if label.len() > NAME_WINDOW {
+                return Err("a Q_Name label longer than thirty two bytes cannot be represented".to_string());
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The thirty two byte storage key a Q_Name resolves to: SHA3 of the bare label bytes, the same key
@@ -247,6 +258,9 @@ pub fn build_typed_order_call(
     nonce: u64,
 ) -> Result<SignedOrderCall, String> {
     let contract_id = contract_id(contract)?;
+    for field in fields {
+        field.value.ensure_fits()?;
+    }
 
     let seed = Zeroizing::new(account_seed(owner_seed, SCHEME_LATTICE, owner_index));
     let (public_key, secret) = ml_dsa::keygen(&seed);
@@ -276,13 +290,14 @@ pub fn build_typed_order_call(
         .checked_add(region_len)
         .ok_or("the verify region overflows the address space")?;
 
-    let last_word_end = fields
-        .iter()
-        .map(|f| f.offset + f.value.width())
-        .chain([scheme_off + WORD, ptr_off + WORD])
-        .max()
-        .unwrap_or(CONTRACT_CONTEXT_BYTES);
-    let mem_len = region_end.max(usize::try_from(last_word_end).unwrap_or(usize::MAX));
+    let mut last_word_end = CONTRACT_CONTEXT_BYTES
+        .max(scheme_off.checked_add(WORD).ok_or("the scheme offset is too large")?)
+        .max(ptr_off.checked_add(WORD).ok_or("the pointer offset is too large")?);
+    for field in fields {
+        let end = field.offset.checked_add(field.value.width()).ok_or("a field offset is too large")?;
+        last_word_end = last_word_end.max(end);
+    }
+    let mem_len = region_end.max(usize::try_from(last_word_end).map_err(|_| "a field offset is too large")?);
     let mut user_memory = vec![0u8; mem_len];
 
     put_word(&mut user_memory, scheme_off, u64::from(SCHEME_LATTICE))?;
@@ -313,12 +328,12 @@ pub fn build_typed_order_call(
 }
 
 pub fn build_call_args(selector: [u8; 4], args: &[FieldArg]) -> Result<Vec<u8>, String> {
-    let mem_len = args
-        .iter()
-        .map(|f| f.offset + f.value.width())
-        .max()
-        .unwrap_or(CONTRACT_CONTEXT_BYTES)
-        .max(CONTRACT_CONTEXT_BYTES);
+    let mut mem_len = CONTRACT_CONTEXT_BYTES;
+    for field in args {
+        field.value.ensure_fits()?;
+        let end = field.offset.checked_add(field.value.width()).ok_or("an argument offset is too large")?;
+        mem_len = mem_len.max(end);
+    }
     let mut user_memory = vec![0u8; usize::try_from(mem_len).map_err(|_| "an argument offset is too large")?];
     for field in args {
         put_bytes(&mut user_memory, field.offset, &field.value.bytes())?;
@@ -781,6 +796,17 @@ mod tests {
         assert_eq!(word_at(mem, 120), 2, "the following word argument lands after the name");
         // The client's read key equals SHA3 of the bare label, the same key the machine derives.
         assert_eq!(name_key("alice"), sha3::sha3_256(b"alice"));
+    }
+
+    #[test]
+    fn a_name_label_wider_than_the_window_is_refused_not_truncated() {
+        let selector = [0x2d, 0xfb, 0xa5, 0xfc];
+        let long = "a".repeat(NAME_WINDOW + 1);
+        let err = build_call_args(selector, &[FieldArg { offset: 80, value: FieldValue::name(&long) }])
+            .unwrap_err();
+        assert!(err.contains("thirty two bytes"), "an over wide label is refused, not silently truncated");
+        let exact = "a".repeat(NAME_WINDOW);
+        assert!(build_call_args(selector, &[FieldArg { offset: 80, value: FieldValue::name(&exact) }]).is_ok());
     }
 
     #[test]
