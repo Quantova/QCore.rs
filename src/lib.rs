@@ -477,12 +477,8 @@ mod client {
                     "the gateway did not report a chain id to bind the signature to".to_string(),
                 );
             }
-            // This id is what the signature binds. The canonical mainnet name is still an open
-            // convention (the chain crate's MAINNET_CHAIN_ID vs the "Q-main-net-1" network preset), so
-            // until the founder settles it the gate keys on ids and prompts for either candidate rather
-            // than risk missing the real mainnet by betting on one spelling.
             let id = chain_id_from_name(name);
-            let is_mainnet = id == MAINNET_CHAIN_ID || id == chain_id_from_name("Q-main-net-1");
+            let is_mainnet = id == MAINNET_CHAIN_ID;
             if let Some(configured) = &self.network.chain_id {
                 if name != configured {
                     return Err(format!(

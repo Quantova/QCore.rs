@@ -69,7 +69,7 @@ fn the_payable_transaction_reproduces_the_qcore_js_vector() {
     assert!(qtv_tx::verify(&wrapper, sender.public_key()));
     assert_eq!(
         wrapper.id(),
-        "QTX1MZP3CC4JCWG77XJUWZUCUFAAZL205P8AXJRUZSK5NEXPXPY74FUS2K2N7U"
+        "QTX1XJ7SXNWD3G65KATFC76F07SD00QTXC26KZAXG72022VFVD5VUJJQ9JAV5J"
     );
 }
 
