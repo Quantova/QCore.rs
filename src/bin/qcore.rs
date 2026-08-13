@@ -41,8 +41,10 @@ fn run(args: &[String]) -> Result<(), String> {
 
 fn cmd_new() -> Result<(), String> {
     let seed = generate_seed()?;
-    println!("seed    {}", to_hex(&seed[..]));
-    println!("phrase  {}", mnemonic_from_seed(&seed));
+    let seed_hex = Zeroizing::new(to_hex(&seed[..]));
+    let phrase = Zeroizing::new(mnemonic_from_seed(&seed));
+    println!("seed    {}", seed_hex.as_str());
+    println!("phrase  {}", phrase.as_str());
     println!("address {}", account_address(&seed, 0));
     println!();
     println!("Keep the seed and the phrase secret. The phrase is the only backup of this key.");
