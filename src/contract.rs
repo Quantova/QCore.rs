@@ -26,6 +26,11 @@ const MSG_FIELDS_OFF: usize = 88;
 // scratch offset avoiding compiled regions
 pub const DEFAULT_REGION_OFFSET: u64 = 8192;
 
+// The chain loads a call's memory image into the machine's fixed sized memory, so a call whose declared
+// argument offsets or verify region would need more than that is invalid. Reject it before allocating
+// rather than let a hostile contract descriptor drive a huge allocation and abort the wallet.
+const MAX_USER_MEMORY: usize = 65536;
+
 // the node's own tag
 const DEPLOY_PARAMS_TAG: &[u8; 8] = b"QDEPLOY1";
 
@@ -381,6 +386,9 @@ pub fn build_typed_order_call(
         last_word_end = last_word_end.max(end);
     }
     let mem_len = region_end.max(usize::try_from(last_word_end).map_err(|_| "a field offset is too large")?);
+    if mem_len > MAX_USER_MEMORY {
+        return Err("the order arguments do not fit the contract memory".to_string());
+    }
     let mut user_memory = vec![0u8; mem_len];
 
     put_word(&mut user_memory, scheme_off, u64::from(SCHEME_LATTICE))?;
@@ -417,7 +425,11 @@ pub fn build_call_args(selector: [u8; 4], args: &[FieldArg]) -> Result<Vec<u8>, 
         let end = field.offset.checked_add(field.value.width()).ok_or("an argument offset is too large")?;
         mem_len = mem_len.max(end);
     }
-    let mut user_memory = vec![0u8; usize::try_from(mem_len).map_err(|_| "an argument offset is too large")?];
+    let mem_len = usize::try_from(mem_len).map_err(|_| "an argument offset is too large")?;
+    if mem_len > MAX_USER_MEMORY {
+        return Err("the call arguments do not fit the contract memory".to_string());
+    }
+    let mut user_memory = vec![0u8; mem_len];
     for field in args {
         put_bytes(&mut user_memory, field.offset, &field.value.bytes())?;
     }
@@ -843,6 +855,19 @@ mod tests {
             order.signature.as_slice().try_into().unwrap(),
             &[],
         ));
+    }
+
+    #[test]
+    fn a_field_offset_past_the_contract_memory_is_refused_not_allocated() {
+        // A hostile contract descriptor offset must error before allocating, never drive a huge alloc.
+        let seed = [4u8; crate::SEED_LEN];
+        let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
+        let fields = vec![TypedField { offset: 1 << 40, width: 8, value: "1".to_string() }];
+        let err = build_order_from_typed(TEST_CHAIN, &contract, MINT_SELECTOR, 112, 120, DEFAULT_REGION_OFFSET, &fields, &seed, 0, 0).unwrap_err();
+        assert!(err.contains("do not fit the contract memory"), "got: {err}");
+        let args = vec![FieldArg { offset: 1 << 40, value: FieldValue::Word(1) }];
+        let err = build_call_args(MINT_SELECTOR, &args).unwrap_err();
+        assert!(err.contains("do not fit the contract memory"), "got: {err}");
     }
 
     #[test]
