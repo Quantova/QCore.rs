@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use qcore::{account_address, Client, Network, Submit};
+use qcore::{account_address, Client, Network, Submit, MAINNET_CHAIN_NAME};
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
@@ -159,7 +159,8 @@ fn a_configured_mainnet_is_refused_when_not_acknowledged_whatever_the_gateway_re
 
 #[test]
 fn a_plain_url_client_is_refused_a_mainnet_gateway_until_acknowledged() {
-    let (port, submits) = spawn_gateway("Q-main-net-1");
+    // The mainnet gate keys on the chain crate's mainnet id, so the gateway must report that identity.
+    let (port, submits) = spawn_gateway(MAINNET_CHAIN_NAME);
     let base = format!("http://127.0.0.1:{port}");
     let seed = [11u8; 32];
     let to = account_address(&seed, 1);
