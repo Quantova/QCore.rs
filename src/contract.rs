@@ -217,6 +217,76 @@ pub struct SignedOrderCall {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// One signed order field as a client reads it from the interface descriptor: the argument offset, the
+/// byte width, and the value as text. The width selects how the value is typed, so the client never has
+/// to know the field encoding, and a wide amount or an address is signed at its true width.
+#[derive(Debug, Clone)]
+pub struct TypedField {
+    pub offset: u64,
+    pub width: u64,
+    pub value: String,
+}
+
+fn field_value_of_width(width: u64, value: &str) -> Result<FieldValue, String> {
+    match width {
+        w if w == WORD => value
+            .parse::<u64>()
+            .map(FieldValue::Word)
+            .map_err(|_| "a word field value is not a whole number".to_string()),
+        16 => value
+            .parse::<u128>()
+            .map(FieldValue::wide)
+            .map_err(|_| "a wide field value is not a whole number".to_string()),
+        32 => {
+            let bytes = crate::json::from_hex(value)?;
+            let addr: [u8; 32] = bytes
+                .try_into()
+                .map_err(|_| "an address field is thirty two bytes of hex".to_string())?;
+            Ok(FieldValue::Address(addr))
+        }
+        w if w == NAME_WINDOW as u64 + WORD => Ok(FieldValue::name(value)),
+        _ => Err(format!("a signed field width of {width} is not supported")),
+    }
+}
+
+/// Build a signed order from the typed field list the descriptor describes, in message order. This is
+/// the path clients use once they read `signed_orders` and the per field `width` from the `.qface`.
+#[allow(clippy::too_many_arguments)]
+pub fn build_order_from_typed(
+    chain_id: u64,
+    contract: &str,
+    selector: [u8; 4],
+    scheme_off: u64,
+    ptr_off: u64,
+    region_off: u64,
+    fields: &[TypedField],
+    owner_seed: &[u8; crate::SEED_LEN],
+    owner_index: u64,
+    nonce: u64,
+) -> Result<SignedOrderCall, String> {
+    let typed: Result<Vec<FieldArg>, String> = fields
+        .iter()
+        .map(|f| {
+            Ok(FieldArg {
+                offset: f.offset,
+                value: field_value_of_width(f.width, &f.value)?,
+            })
+        })
+        .collect();
+    build_typed_order_call(
+        chain_id,
+        contract,
+        selector,
+        scheme_off,
+        ptr_off,
+        region_off,
+        &typed?,
+        owner_seed,
+        owner_index,
+        nonce,
+    )
+}
+
 pub fn build_signed_order_call(
     chain_id: u64,
     contract: &str,
@@ -742,6 +812,31 @@ mod tests {
         assert_eq!(word_at(&order.user_memory, 128), 100, "the argument region carries the low word");
         assert_eq!(word_at(&order.user_memory, 136), 1, "then the high word");
         assert_eq!(&order.user_memory[80..112], &to);
+        assert!(ml_dsa::verify(
+            order.public_key.as_slice().try_into().unwrap(),
+            &order.message,
+            order.signature.as_slice().try_into().unwrap(),
+            &[],
+        ));
+    }
+
+    #[test]
+    fn build_order_from_typed_binds_a_wide_field_by_its_descriptor_width() {
+        // The client path: fields in message order, each carrying only its width and text value as the
+        // .qface reports them. Width 16 must type the amount as a full u128, not an eight byte word.
+        let seed = [4u8; crate::SEED_LEN];
+        let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
+        let to = [0xABu8; 32];
+        let to_hex: String = to.iter().map(|b| format!("{b:02x}")).collect();
+        let fields = vec![
+            TypedField { offset: 128, width: 16, value: "18446744073709551716".to_string() },
+            TypedField { offset: 80, width: 32, value: to_hex },
+        ];
+        let order = build_order_from_typed(TEST_CHAIN, &contract, MINT_SELECTOR, 112, 120, DEFAULT_REGION_OFFSET, &fields, &seed, 0, 0).unwrap();
+        assert_eq!(order.message.len(), 88 + 16 + 32, "the descriptor width widens the preimage");
+        assert_eq!(&order.message[88..96], &100u64.to_be_bytes());
+        assert_eq!(&order.message[96..104], &1u64.to_be_bytes());
+        assert_eq!(&order.message[104..136], &to);
         assert!(ml_dsa::verify(
             order.public_key.as_slice().try_into().unwrap(),
             &order.message,
