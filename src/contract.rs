@@ -249,7 +249,8 @@ fn field_value_of_width(width: u64, value: &str) -> Result<FieldValue, String> {
                 .map_err(|_| "an address field is thirty two bytes of hex".to_string())?;
             Ok(FieldValue::Address(addr))
         }
-        w if w == NAME_WINDOW as u64 + WORD => Ok(FieldValue::name(value)),
+        // No descriptor emits a forty byte signed field and the contract never reconstructs a
+        // contiguous name key, so a name width here would sign a preimage no chain accepts. Refuse it.
         _ => Err(format!("a signed field width of {width} is not supported")),
     }
 }
