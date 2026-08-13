@@ -72,6 +72,7 @@ const NAME_WINDOW: usize = 32;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FieldValue {
     Word(u64),
+    Wide([u8; 16]),
     Address([u8; 32]),
     Name(Vec<u8>),
 }
@@ -82,9 +83,20 @@ impl FieldValue {
         FieldValue::Name(label.as_bytes().to_vec())
     }
 
+    /// A u128 signed field: the low word then the high word, each big endian, exactly the two word
+    /// order the contract reconstructs before it verifies the owner's signature. Packing a u128 as a
+    /// single eight byte word instead would sign a shorter message than the contract rebuilds.
+    pub fn wide(value: u128) -> FieldValue {
+        let mut out = [0u8; 16];
+        out[..8].copy_from_slice(&(value as u64).to_be_bytes());
+        out[8..].copy_from_slice(&((value >> 64) as u64).to_be_bytes());
+        FieldValue::Wide(out)
+    }
+
     fn bytes(&self) -> Vec<u8> {
         match self {
             FieldValue::Word(w) => w.to_be_bytes().to_vec(),
+            FieldValue::Wide(b) => b.to_vec(),
             FieldValue::Address(a) => a.to_vec(),
             FieldValue::Name(label) => {
                 let mut out = vec![0u8; NAME_WINDOW + WORD as usize];
@@ -99,6 +111,7 @@ impl FieldValue {
     fn width(&self) -> u64 {
         match self {
             FieldValue::Word(_) => WORD,
+            FieldValue::Wide(_) => 16,
             FieldValue::Address(_) => 32,
             FieldValue::Name(_) => NAME_WINDOW as u64 + WORD,
         }
@@ -706,6 +719,36 @@ mod tests {
     }
 
     const MINT_SELECTOR: [u8; 4] = [0x3e, 0xcc, 0xb9, 0xbc];
+
+    #[test]
+    fn a_typed_order_binds_a_wide_u128_field_at_full_width() {
+        // The QAsset mint conformance case: a u128 amount then a whole address, signed in message
+        // order at the frozen argument offsets (to@80, amount@128). The contract reconstructs
+        // 88 + 16 + 32 = 136 bytes; packing the amount as one word would sign 128 and be rejected.
+        let seed = [4u8; crate::SEED_LEN];
+        let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
+        let to = [0xABu8; 32];
+        let amount: u128 = (1u128 << 64) + 100; // low word 100, high word 1
+        let fields = vec![
+            FieldArg { offset: 128, value: FieldValue::wide(amount) },
+            FieldArg { offset: 80, value: FieldValue::Address(to) },
+        ];
+        let order = build_typed_order_call(TEST_CHAIN, &contract, MINT_SELECTOR, 112, 120, DEFAULT_REGION_OFFSET, &fields, &seed, 0, 0).unwrap();
+
+        assert_eq!(order.message.len(), 88 + 16 + 32, "the wide amount widens the preimage to 136 bytes");
+        assert_eq!(&order.message[88..96], &100u64.to_be_bytes(), "the amount low word is first");
+        assert_eq!(&order.message[96..104], &1u64.to_be_bytes(), "the amount high word is second");
+        assert_eq!(&order.message[104..136], &to, "the address follows the wide amount");
+        assert_eq!(word_at(&order.user_memory, 128), 100, "the argument region carries the low word");
+        assert_eq!(word_at(&order.user_memory, 136), 1, "then the high word");
+        assert_eq!(&order.user_memory[80..112], &to);
+        assert!(ml_dsa::verify(
+            order.public_key.as_slice().try_into().unwrap(),
+            &order.message,
+            order.signature.as_slice().try_into().unwrap(),
+            &[],
+        ));
+    }
 
     #[test]
     fn a_typed_order_binds_a_word_and_a_whole_address_field() {
