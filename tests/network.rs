@@ -158,23 +158,31 @@ fn a_configured_mainnet_is_refused_when_not_acknowledged_whatever_the_gateway_re
 }
 
 #[test]
-fn a_plain_url_client_is_not_forced_to_acknowledge_mainnet_by_any_gateway_string() {
+fn a_plain_url_client_is_refused_a_mainnet_gateway_until_acknowledged() {
     let (port, submits) = spawn_gateway("Q-main-net-1");
-    let client = Client::new(format!("http://127.0.0.1:{port}"));
+    let base = format!("http://127.0.0.1:{port}");
     let seed = [11u8; 32];
     let to = account_address(&seed, 1);
-    let (_signed, outcome) = client
+
+    // With no chosen network and no acknowledgement, a gateway that reports the mainnet chain must not
+    // draw a real value signature: the client refuses before signing and nothing is submitted.
+    let client = Client::new(base.clone());
+    let err = client
         .transfer(&seed, 0, &to, 1000, 1000)
-        .expect("a plain url client signs whatever chain the gateway names");
+        .expect_err("a url client must refuse a mainnet gateway it did not acknowledge");
+    assert!(err.contains("mainnet"), "the refusal names mainnet: {err}");
+    assert_eq!(submits.load(Ordering::SeqCst), 0, "nothing is submitted without acknowledgement");
+
+    // Acknowledging mainnet on a url only client lets it sign and submit.
+    let acked = Client::with_network(base.clone(), Network::for_url(base), true);
+    let (_signed, outcome) = acked
+        .transfer(&seed, 0, &to, 1000, 1000)
+        .expect("an acknowledged url client signs");
     match outcome {
         Submit::Accepted { .. } => {}
         other => panic!("expected an accepted submission, got {other:?}"),
     }
-    assert_eq!(
-        submits.load(Ordering::SeqCst),
-        1,
-        "a plain url client submits without a mainnet prompt"
-    );
+    assert_eq!(submits.load(Ordering::SeqCst), 1, "the acknowledged client submits once");
 }
 
 #[test]

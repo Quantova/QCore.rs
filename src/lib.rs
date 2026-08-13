@@ -28,6 +28,11 @@ pub const DENOMINATION: &str = "Quon";
 
 pub const DECIMALS: u8 = 6;
 
+// The network name the deployed mainnet reports and the SDK is configured for. The plain url mainnet
+// acknowledgement gate reads this same constant, so a url only client is prompted before it signs real
+// value, and if the mainnet name is ever revised both the network and the gate move together.
+pub const MAINNET_NETWORK_NAME: &str = "Q-main-net-1";
+
 #[derive(Debug, Clone)]
 pub struct Network {
     pub name: String,
@@ -55,7 +60,7 @@ impl Network {
     pub fn mainnet() -> Network {
         Network {
             name: "mainnet".to_string(),
-            chain_id: Some("Q-main-net-1".to_string()),
+            chain_id: Some(MAINNET_NETWORK_NAME.to_string()),
             rpc_url: None,
             explorer_url: Some("https://qvmscan.io".to_string()),
             denomination: DENOMINATION.to_string(),
@@ -483,7 +488,7 @@ mod client {
                         "the gateway reports chain {name} but this client is configured for {configured}, refusing to sign a transaction that would be valid on a network you did not choose"
                     ));
                 }
-            } else if name == MAINNET_CHAIN_NAME && !self.acknowledge_mainnet {
+            } else if name == MAINNET_NETWORK_NAME && !self.acknowledge_mainnet {
                 return Err(format!(
                     "the gateway reports the mainnet chain {name} but this client did not choose a network, refusing to sign a mainnet transaction without acknowledging mainnet"
                 ));
@@ -952,7 +957,7 @@ mod tests {
         };
         let client = Client::new("http://127.0.0.1:8645");
         assert!(
-            client.signing_chain_id(&info(MAINNET_CHAIN_NAME)).is_err(),
+            client.signing_chain_id(&info(MAINNET_NETWORK_NAME)).is_err(),
             "a url client with no chosen network must refuse a mainnet reporting gateway"
         );
         assert!(
