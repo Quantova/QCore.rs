@@ -55,7 +55,7 @@ impl Network {
     pub fn mainnet() -> Network {
         Network {
             name: "mainnet".to_string(),
-            chain_id: Some(MAINNET_CHAIN_NAME.to_string()),
+            chain_id: Some("Q-main-net-1".to_string()),
             rpc_url: None,
             explorer_url: Some("https://qvmscan.io".to_string()),
             denomination: DENOMINATION.to_string(),
@@ -477,17 +477,19 @@ mod client {
                     "the gateway did not report a chain id to bind the signature to".to_string(),
                 );
             }
-            // This id is what the signature binds; the mainnet acknowledgement gate keys on the chain
-            // crate's mainnet id, never a name spelling, so the SDK derives the mainnet identity the
-            // chain defines instead of restating it and drifting out of sync with the deployed chain.
+            // This id is what the signature binds. The canonical mainnet name is still an open
+            // convention (the chain crate's MAINNET_CHAIN_ID vs the "Q-main-net-1" network preset), so
+            // until the founder settles it the gate keys on ids and prompts for either candidate rather
+            // than risk missing the real mainnet by betting on one spelling.
             let id = chain_id_from_name(name);
+            let is_mainnet = id == MAINNET_CHAIN_ID || id == chain_id_from_name("Q-main-net-1");
             if let Some(configured) = &self.network.chain_id {
                 if name != configured {
                     return Err(format!(
                         "the gateway reports chain {name} but this client is configured for {configured}, refusing to sign a transaction that would be valid on a network you did not choose"
                     ));
                 }
-            } else if id == MAINNET_CHAIN_ID && !self.acknowledge_mainnet {
+            } else if is_mainnet && !self.acknowledge_mainnet {
                 return Err(format!(
                     "the gateway reports the mainnet chain {name} but this client did not choose a network, refusing to sign a mainnet transaction without acknowledging mainnet"
                 ));
