@@ -346,6 +346,7 @@ pub fn build_typed_order_call(
     owner_index: u64,
     nonce: u64,
 ) -> Result<SignedOrderCall, String> {
+    let region_off = if region_off == 0 { DEFAULT_REGION_OFFSET } else { region_off };
     let contract_id = contract_id(contract)?;
     for field in fields {
         field.value.ensure_fits()?;
@@ -850,6 +851,30 @@ mod tests {
         assert_eq!(&order.message[88..96], &100u64.to_be_bytes());
         assert_eq!(&order.message[96..104], &1u64.to_be_bytes());
         assert_eq!(&order.message[104..136], &to);
+        assert!(ml_dsa::verify(
+            order.public_key.as_slice().try_into().unwrap(),
+            &order.message,
+            order.signature.as_slice().try_into().unwrap(),
+            &[],
+        ));
+    }
+
+    #[test]
+    fn a_zero_region_offset_falls_back_to_the_default_and_does_not_clobber_the_signed_fields() {
+        let seed = [4u8; crate::SEED_LEN];
+        let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
+        let to = [0xABu8; 32];
+        let to_hex: String = to.iter().map(|b| format!("{b:02x}")).collect();
+        let fields = vec![
+            TypedField { offset: 128, width: 16, value: "18446744073709551716".to_string() },
+            TypedField { offset: 80, width: 32, value: to_hex },
+        ];
+        let order = build_order_from_typed(TEST_CHAIN, &contract, MINT_SELECTOR, 112, 120, 0, &fields, &seed, 0, 0).unwrap();
+        let mem = &order.call_args[4..];
+        assert_eq!(&mem[80..112], &to, "the executable recipient matches the signed recipient");
+        assert_eq!(&order.message[104..136], &to);
+        let base = DEFAULT_REGION_OFFSET as usize;
+        assert_eq!(&mem[base..base + order.public_key.len()], &order.public_key[..], "the region lands at the default, clear of the fields");
         assert!(ml_dsa::verify(
             order.public_key.as_slice().try_into().unwrap(),
             &order.message,
