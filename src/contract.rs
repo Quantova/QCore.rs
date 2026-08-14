@@ -905,7 +905,6 @@ mod tests {
         let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
         let to = [0xABu8; 32];
         let to_hex: String = to.iter().map(|b| format!("{b:02x}")).collect();
-        // default region offset the guard falls back to, so the verify region would overwrite it
         let fields = vec![
             TypedField { offset: 96, width: 16, value: "500".to_string() },
             TypedField { offset: DEFAULT_REGION_OFFSET, width: 32, value: to_hex },
