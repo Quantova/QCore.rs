@@ -3,7 +3,7 @@
 
 use qtv_account::{account_seed, SCHEME_LATTICE};
 use qtv_crypto::{ml_dsa, sha3};
-use zeroize::Zeroizing;
+use qtv_wipe::Zeroizing;
 
 use crate::json::{self, object, Json};
 
