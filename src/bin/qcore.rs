@@ -5,7 +5,7 @@ use qcore::{
     account_address, account_public_key, generate_seed, mnemonic_from_seed, valid_address, Client,
     Network, Submit, TxStatus,
 };
-use zeroize::Zeroizing;
+use qtv_wipe::Zeroizing;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

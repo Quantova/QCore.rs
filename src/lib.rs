@@ -11,7 +11,7 @@ use json::{object, to_hex, Json};
 use qtv_account::derive;
 use qtv_codec::{to_bytes, Encoder};
 use qtv_tx::{sign, Body, Call};
-use zeroize::Zeroizing;
+use qtv_wipe::Zeroizing;
 
 pub use qtv_tx::{
     chain_id_from_name, LOCAL_CHAIN_ID, LOCAL_CHAIN_NAME, MAINNET_CHAIN_ID, MAINNET_CHAIN_NAME,
