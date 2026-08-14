@@ -391,6 +391,22 @@ pub fn build_typed_order_call(
     if mem_len > MAX_USER_MEMORY {
         return Err("the order arguments do not fit the contract memory".to_string());
     }
+
+    let mut spans: Vec<(u64, u64)> = Vec::with_capacity(fields.len() + 3);
+    spans.push((scheme_off, WORD));
+    spans.push((ptr_off, WORD));
+    for field in fields {
+        spans.push((field.offset, field.value.width()));
+    }
+    spans.push((region_off, region_len as u64));
+    spans.sort_by_key(|span| span.0);
+    for pair in spans.windows(2) {
+        let end = pair[0].0.checked_add(pair[0].1).ok_or("a call span overflows the argument memory")?;
+        if end > pair[1].0 {
+            return Err("the order layout overlaps the verify region or a signed field".to_string());
+        }
+    }
+
     let mut user_memory = vec![0u8; mem_len];
 
     put_word(&mut user_memory, scheme_off, u64::from(SCHEME_LATTICE))?;
@@ -881,6 +897,30 @@ mod tests {
             order.signature.as_slice().try_into().unwrap(),
             &[],
         ));
+    }
+
+    #[test]
+    fn a_field_overlapping_the_verify_region_is_refused_not_clobbered() {
+        let seed = [4u8; crate::SEED_LEN];
+        let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
+        let to = [0xABu8; 32];
+        let to_hex: String = to.iter().map(|b| format!("{b:02x}")).collect();
+        // default region offset the guard falls back to, so the verify region would overwrite it
+        let fields = vec![
+            TypedField { offset: 96, width: 16, value: "500".to_string() },
+            TypedField { offset: DEFAULT_REGION_OFFSET, width: 32, value: to_hex },
+        ];
+        let err = build_order_from_typed(TEST_CHAIN, &contract, MINT_SELECTOR, 80, 88, DEFAULT_REGION_OFFSET, &fields, &seed, 0, 0).unwrap_err();
+        assert!(err.contains("overlaps the verify region"), "got: {err}");
+    }
+
+    #[test]
+    fn a_field_overlapping_the_scheme_or_pointer_word_is_refused() {
+        let seed = [4u8; crate::SEED_LEN];
+        let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
+        let fields = vec![FieldArg { offset: 88, value: FieldValue::Word(1) }];
+        let err = build_typed_order_call(TEST_CHAIN, &contract, BUMP_SELECTOR, 80, 88, DEFAULT_REGION_OFFSET, &fields, &seed, 0, 0).unwrap_err();
+        assert!(err.contains("overlaps the verify region"), "got: {err}");
     }
 
     #[test]
