@@ -858,6 +858,43 @@ mod tests {
     }
 
     #[test]
+    fn the_chain_id_and_fee_are_bound_into_the_signed_tx_and_cannot_be_swapped() {
+        let seed = [7u8; SEED_LEN];
+        let sender = derive(&seed, 0);
+        let target = account_address(&seed, 1);
+
+        let testnet = sign_transfer(&seed, 0, &target, 1000, 5, 500, TESTNET_CHAIN_ID).unwrap();
+        let mainnet = sign_transfer(&seed, 0, &target, 1000, 5, 500, MAINNET_CHAIN_ID).unwrap();
+        assert_ne!(testnet.tx_bytes, mainnet.tx_bytes, "the chain id moves the signed bytes");
+        assert_ne!(testnet.tx_id, mainnet.tx_id);
+
+        let cheap = sign_transfer(&seed, 0, &target, 1000, 5, 500, TESTNET_CHAIN_ID).unwrap();
+        let dear = sign_transfer(&seed, 0, &target, 1000, 5, 999, TESTNET_CHAIN_ID).unwrap();
+        assert_ne!(cheap.tx_bytes, dear.tx_bytes, "the fee moves the signed bytes");
+
+        let mut encoder = Encoder::new();
+        encoder.put_u64(1000);
+        let call = Call::new(target.clone(), encoder.into_bytes());
+        let body = Body::with_context(sender.address(), 5, NATIVE_TRANSFER_METER, 500, call, 0, TESTNET_CHAIN_ID);
+        let wrapper = sign(&sender, &body);
+        assert!(qtv_tx::verify(&wrapper, sender.public_key()));
+
+        let swapped_chain = qtv_tx::Wrapper::new(
+            Body::with_context(body.sender().to_string(), body.nonce(), body.meter_limit(), body.fee(), body.call().clone(), body.value(), MAINNET_CHAIN_ID),
+            wrapper.scheme(),
+            wrapper.signature().to_vec(),
+        );
+        assert!(!qtv_tx::verify(&swapped_chain, sender.public_key()), "the testnet signature must not verify for mainnet");
+
+        let swapped_fee = qtv_tx::Wrapper::new(
+            Body::with_context(body.sender().to_string(), body.nonce(), body.meter_limit(), 999, body.call().clone(), body.value(), TESTNET_CHAIN_ID),
+            wrapper.scheme(),
+            wrapper.signature().to_vec(),
+        );
+        assert!(!qtv_tx::verify(&swapped_fee, sender.public_key()), "the testnet signature must not verify at a swapped fee");
+    }
+
+    #[test]
     fn address_case_cannot_change_the_signature() {
         let seed = [7u8; SEED_LEN];
         let target = account_address(&seed, 1);
