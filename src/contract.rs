@@ -914,6 +914,31 @@ mod tests {
     }
 
     #[test]
+    fn a_field_fully_contained_in_another_field_is_refused() {
+        let seed = [4u8; crate::SEED_LEN];
+        let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
+        let fields = vec![
+            FieldArg { offset: 96, value: FieldValue::Address([0u8; 32]) },
+            FieldArg { offset: 100, value: FieldValue::Word(1) },
+        ];
+        let err = build_typed_order_call(TEST_CHAIN, &contract, MINT_SELECTOR, 80, 88, DEFAULT_REGION_OFFSET, &fields, &seed, 0, 0).unwrap_err();
+        assert!(err.contains("overlaps the verify region"), "got: {err}");
+    }
+
+    #[test]
+    fn a_three_way_overlap_is_refused() {
+        let seed = [4u8; crate::SEED_LEN];
+        let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
+        let fields = vec![
+            FieldArg { offset: 96, value: FieldValue::Address([0u8; 32]) },
+            FieldArg { offset: 104, value: FieldValue::Word(1) },
+            FieldArg { offset: 110, value: FieldValue::Word(1) },
+        ];
+        let err = build_typed_order_call(TEST_CHAIN, &contract, MINT_SELECTOR, 80, 88, DEFAULT_REGION_OFFSET, &fields, &seed, 0, 0).unwrap_err();
+        assert!(err.contains("overlaps the verify region"), "got: {err}");
+    }
+
+    #[test]
     fn a_field_overlapping_the_scheme_or_pointer_word_is_refused() {
         let seed = [4u8; crate::SEED_LEN];
         let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
