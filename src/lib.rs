@@ -485,9 +485,10 @@ mod client {
                         "the gateway reports chain {name} but this client is configured for {configured}, refusing to sign a transaction that would be valid on a network you did not choose"
                     ));
                 }
-            } else if is_mainnet && !self.acknowledge_mainnet {
+            }
+            if is_mainnet && !self.acknowledge_mainnet {
                 return Err(format!(
-                    "the gateway reports the mainnet chain {name} but this client did not choose a network, refusing to sign a mainnet transaction without acknowledging mainnet"
+                    "the gateway reports the mainnet chain {name} but this client did not acknowledge mainnet, refusing to sign a mainnet transaction without acknowledging mainnet"
                 ));
             }
             Ok(id)
@@ -997,6 +998,31 @@ mod tests {
         assert!(
             client.signing_chain_id(&info("Q-test-net-1")).is_ok(),
             "the same client still signs for a testnet gateway"
+        );
+    }
+
+    #[cfg(feature = "client")]
+    #[test]
+    fn a_configured_client_refuses_an_unacknowledged_mainnet_id_even_with_the_flag_off() {
+        let info = |chain: &str| NodeInfo {
+            chain_id: chain.to_string(),
+            genesis_hash: String::new(),
+            head_height: 0,
+            denomination: String::new(),
+            transfer_fee: 0,
+            version: String::new(),
+        };
+        let mut network = Network::testnet();
+        network.chain_id = Some(MAINNET_CHAIN_NAME.to_string());
+        let client = Client::with_network("http://127.0.0.1:8645", network.clone(), false);
+        assert!(
+            client.signing_chain_id(&info(MAINNET_CHAIN_NAME)).is_err(),
+            "a configured client must refuse a mainnet id it did not acknowledge, even with its is_mainnet flag off"
+        );
+        let acknowledged = Client::with_network("http://127.0.0.1:8645", network, true);
+        assert!(
+            acknowledged.signing_chain_id(&info(MAINNET_CHAIN_NAME)).is_ok(),
+            "acknowledging mainnet lets the same configured client sign"
         );
     }
 }
