@@ -162,6 +162,41 @@ pub fn sign_call(
     sign_payable_call(seed, index, target, args, 0, nonce, meter_limit, fee, chain_id)
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn sign_asset_call(
+    seed: &[u8; SEED_LEN],
+    index: u64,
+    target: &str,
+    args: Vec<u8>,
+    asset_issuer: &str,
+    amount: u64,
+    nonce: u64,
+    meter_limit: u64,
+    fee: u128,
+    chain_id: u64,
+) -> Result<SignedTransfer, String> {
+    if !valid_address(target) {
+        return Err("the target is not a Q1 address".to_string());
+    }
+    let issuer = qtv_idfmt::parse_address(asset_issuer)
+        .map_err(|_| "the asset issuer is not a Q1 address".to_string())?;
+    if issuer.len() != 32 {
+        return Err("the asset issuer is not a Q1 address".to_string());
+    }
+    let mut issuer32 = [0u8; 32];
+    issuer32.copy_from_slice(&issuer);
+    let sender = derive(seed, index);
+    let call = Call::new(target.to_string(), args);
+    let body = Body::with_context(sender.address(), nonce, meter_limit, fee, call, amount, chain_id)
+        .carrying(issuer32);
+    let wrapper = sign(&sender, &body);
+    Ok(SignedTransfer {
+        from: sender.address(),
+        tx_id: wrapper.id(),
+        tx_bytes: to_bytes(&wrapper),
+    })
+}
+
 pub fn sign_transfer(
     seed: &[u8; SEED_LEN],
     index: u64,
