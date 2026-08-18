@@ -539,6 +539,35 @@ pub fn events_body(height: u64) -> String {
     object(vec![("height", Json::Int(height))]).render()
 }
 
+pub const TOKEN_DECIMALS_SLOT: u64 = 0;
+pub const TOKEN_SYMBOL_SLOT: u64 = 1;
+
+pub fn pack_symbol(symbol: &str) -> u64 {
+    let mut out = [0u8; 8];
+    let bytes = symbol.as_bytes();
+    let n = bytes.len().min(8);
+    out[..n].copy_from_slice(&bytes[..n]);
+    u64::from_be_bytes(out)
+}
+
+pub fn unpack_symbol(word: u64) -> String {
+    let bytes = word.to_be_bytes();
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).into_owned()
+}
+
+pub fn asset_balance_body(issuer: &str, holder: &str) -> String {
+    object(vec![
+        ("issuer", Json::str(issuer)),
+        ("holder", Json::str(holder)),
+    ])
+    .render()
+}
+
+pub fn asset_supply_body(issuer: &str) -> String {
+    object(vec![("issuer", Json::str(issuer))]).render()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageSlot {
     pub slot: [u8; 32],
@@ -632,6 +661,15 @@ pub fn event_word(data: &[u8]) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_symbol_round_trips_through_the_metadata_word() {
+        for symbol in ["LTK", "USDC", "WBTC", "wstETH", "Q"] {
+            assert_eq!(unpack_symbol(pack_symbol(symbol)), symbol);
+        }
+        assert_eq!(pack_symbol("LTK"), 0x4c54_4b00_0000_0000);
+        assert_eq!(pack_symbol("toolongsymbol"), pack_symbol("toolongs"));
+    }
 
     const BUMP_SELECTOR: [u8; 4] = [0x6c, 0xad, 0x12, 0xfc];
     const BUMPED_SELECTOR: [u8; 4] = [0x6e, 0x82, 0x53, 0x1d];
