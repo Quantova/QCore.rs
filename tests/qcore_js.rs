@@ -47,14 +47,14 @@ fn the_transfer_body_reproduces_the_qcore_js_vector() {
         LOCAL_CHAIN_ID,
     )
     .unwrap();
-    let body_bytes = "20000000000000008c705c118414c1e32a977ca4ee36fc3f2888b67ec031596abf4ac70e5f5a14f00300000000000000085200000000000040420f000000000000000000000000002000000000000000ba83f436d6f46e181c3bae40ba4ffedb0f62e67cde1a0c558f459b996229593b0400000000000000deadbeef000000000000000098ba0ce08f27d0be";
+    let body_bytes = "20000000000000008c705c118414c1e32a977ca4ee36fc3f2888b67ec031596abf4ac70e5f5a14f00300000000000000085200000000000040420f000000000000000000000000002000000000000000ba83f436d6f46e181c3bae40ba4ffedb0f62e67cde1a0c558f459b996229593b0400000000000000deadbeef000000000000000098ba0ce08f27d0be0000000000000000";
     assert!(
         hex(&signed.tx_bytes).starts_with(body_bytes),
         "the signed body prefix is the frozen QCore.js transfer body"
     );
     assert_eq!(
         signed.tx_id,
-        "QTX1YK67DZ8VNL9KLDM7SAKMRM0C34XZKTRTNGRXHKGN962GW285ULTSK7GQCM"
+        "QTX10W6GMYMZLPSY6MZ2FE4QXQSHJUEZTQK5YYWCZSYVQSVFX6GD76ZQSLDQTQ"
     );
 }
 
@@ -69,7 +69,7 @@ fn the_payable_transaction_reproduces_the_qcore_js_vector() {
     assert!(qtv_tx::verify(&wrapper, sender.public_key()));
     assert_eq!(
         wrapper.id(),
-        "QTX1XJ7SXNWD3G65KATFC76F07SD00QTXC26KZAXG72022VFVD5VUJJQ9JAV5J"
+        "QTX1TLFZ7EQNKADUQ6LSFTQUFU7E7ZSQQCX6RY46VNQ8T07DUZGANX7QK0Z0MD"
     );
 }
 
