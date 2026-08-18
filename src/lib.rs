@@ -673,18 +673,6 @@ mod client {
             Ok((signed, outcome))
         }
 
-        pub fn transfer_asset(
-            &self,
-            seed: &[u8; SEED_LEN],
-            index: u64,
-            to: &str,
-            asset_issuer: &str,
-            amount: u64,
-            max_fee: u128,
-        ) -> Result<(SignedTransfer, Submit), String> {
-            self.call_asset(seed, index, to, Vec::new(), asset_issuer, amount, NATIVE_TRANSFER_METER, max_fee)
-        }
-
         pub fn storage(&self, contract: &str) -> Result<Vec<contract::StorageSlot>, String> {
             contract::parse_storage(&self.rpc("get_storage", contract::storage_body(contract))?)
         }
