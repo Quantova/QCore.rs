@@ -642,6 +642,49 @@ mod client {
             Ok((signed, outcome))
         }
 
+        #[allow(clippy::too_many_arguments)]
+        pub fn call_asset(
+            &self,
+            seed: &[u8; SEED_LEN],
+            index: u64,
+            target: &str,
+            args: Vec<u8>,
+            asset_issuer: &str,
+            amount: u64,
+            meter_limit: u64,
+            max_fee: u128,
+        ) -> Result<(SignedTransfer, Submit), String> {
+            let info = self.node_info()?;
+            self.guard_mainnet()?;
+            if info.transfer_fee > max_fee {
+                return Err(format!(
+                    "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
+                    info.transfer_fee
+                ));
+            }
+            let sender = account_address(seed, index);
+            let account = self.account(&sender)?;
+            let chain_id = self.signing_chain_id(&info)?;
+            let signed = sign_asset_call(
+                seed, index, target, args, asset_issuer, amount, account.nonce, meter_limit,
+                info.transfer_fee, chain_id,
+            )?;
+            let outcome = self.submit(&signed.tx_bytes)?;
+            Ok((signed, outcome))
+        }
+
+        pub fn transfer_asset(
+            &self,
+            seed: &[u8; SEED_LEN],
+            index: u64,
+            to: &str,
+            asset_issuer: &str,
+            amount: u64,
+            max_fee: u128,
+        ) -> Result<(SignedTransfer, Submit), String> {
+            self.call_asset(seed, index, to, Vec::new(), asset_issuer, amount, NATIVE_TRANSFER_METER, max_fee)
+        }
+
         pub fn storage(&self, contract: &str) -> Result<Vec<contract::StorageSlot>, String> {
             contract::parse_storage(&self.rpc("get_storage", contract::storage_body(contract))?)
         }
