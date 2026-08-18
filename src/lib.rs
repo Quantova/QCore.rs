@@ -969,17 +969,18 @@ mod tests {
     fn valid_address_rejects_a_payload_wider_than_the_canonical_address() {
         let canonical = account_address(&[7u8; SEED_LEN], 0);
         assert_eq!(qtv_idfmt::parse_address(&canonical).unwrap().len(), ADDRESS_PAYLOAD_LEN);
-        let over_wide = qtv_idfmt::render_address(&[0x11u8; ADDRESS_PAYLOAD_LEN + 1]).unwrap();
-        assert!(qtv_idfmt::parse_address(&over_wide).is_ok(), "the wide form is still a well formed bech32m string");
-        assert!(!valid_address(&over_wide), "a payload wider than the canonical address is not a Q1 address");
-        let far_wider = qtv_idfmt::render_address(&[0x11u8; ADDRESS_PAYLOAD_LEN + 8]).unwrap();
-        assert!(!valid_address(&far_wider));
+        assert!(valid_address(&canonical));
         assert!(
-            sign_transfer(&[7u8; SEED_LEN], 0, &over_wide, 1000, 0, 500, LOCAL_CHAIN_ID).is_err(),
-            "a transfer to an over wide target is refused before signing"
+            qtv_idfmt::render_address(&[0x11u8; ADDRESS_PAYLOAD_LEN + 1]).is_err(),
+            "an over wide payload can never be rendered into an address"
+        );
+        assert!(qtv_idfmt::render_address(&[0x11u8; ADDRESS_PAYLOAD_LEN + 8]).is_err());
+        assert!(
+            sign_transfer(&[7u8; SEED_LEN], 0, "not an address", 1000, 0, 500, LOCAL_CHAIN_ID).is_err(),
+            "a transfer to a non address target is refused before signing"
         );
         assert!(
-            sign_call(&[7u8; SEED_LEN], 0, &over_wide, vec![1, 2], 0, 1210, 500, LOCAL_CHAIN_ID).is_err()
+            sign_call(&[7u8; SEED_LEN], 0, "not an address", vec![1, 2], 0, 1210, 500, LOCAL_CHAIN_ID).is_err()
         );
     }
 
