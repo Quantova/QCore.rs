@@ -8,7 +8,7 @@ use qtv_wipe::Zeroizing;
 use crate::json::{self, object, Json};
 
 // mirrors the node's CONTRACT_CONTEXT_BYTES
-pub const CONTRACT_CONTEXT_BYTES: u64 = 80;
+pub const CONTRACT_CONTEXT_BYTES: u64 = 88;
 
 const WORD: u64 = 8;
 
@@ -689,7 +689,7 @@ mod tests {
     // The caller supplied argument region begins after the eighty byte host context: @caller,
     // @contract, @time, and @chain. Order fields sit at or above eighty.
     fn counter_layout() -> OrderLayout {
-        OrderLayout::new(80, 88, vec![96])
+        OrderLayout::new(88, 96, vec![104])
     }
 
     #[test]
@@ -716,9 +716,9 @@ mod tests {
             build_signed_order_call(TEST_CHAIN, &contract, BUMP_SELECTOR, &layout, &[5], &seed, 0, 0)
                 .unwrap();
 
-        assert_eq!(word_at(&order.user_memory, 80), u64::from(SCHEME_LATTICE));
-        assert_eq!(word_at(&order.user_memory, 88), DEFAULT_REGION_OFFSET);
-        assert_eq!(word_at(&order.user_memory, 96), 5);
+        assert_eq!(word_at(&order.user_memory, 88), u64::from(SCHEME_LATTICE));
+        assert_eq!(word_at(&order.user_memory, 96), DEFAULT_REGION_OFFSET);
+        assert_eq!(word_at(&order.user_memory, 104), 5);
 
         assert!(order.user_memory[..CONTRACT_CONTEXT_BYTES as usize].iter().all(|&b| b == 0));
 
@@ -869,25 +869,25 @@ mod tests {
     #[test]
     fn a_typed_order_binds_a_wide_u128_field_at_full_width() {
         // The QAsset mint conformance case: a u128 amount then a whole address, signed in message
-        // order at the frozen argument offsets (to@80, amount@128). The contract reconstructs
+        // order at the frozen argument offsets (to@88, amount@136). The contract reconstructs
         // 88 + 16 + 32 = 136 bytes; packing the amount as one word would sign 128 and be rejected.
         let seed = [4u8; crate::SEED_LEN];
         let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
         let to = [0xABu8; 32];
         let amount: u128 = (1u128 << 64) + 100; // low word 100, high word 1
         let fields = vec![
-            FieldArg { offset: 128, value: FieldValue::wide(amount) },
-            FieldArg { offset: 80, value: FieldValue::Address(to) },
+            FieldArg { offset: 136, value: FieldValue::wide(amount) },
+            FieldArg { offset: 88, value: FieldValue::Address(to) },
         ];
-        let order = build_typed_order_call(TEST_CHAIN, &contract, MINT_SELECTOR, 112, 120, DEFAULT_REGION_OFFSET, &fields, &seed, 0, 0).unwrap();
+        let order = build_typed_order_call(TEST_CHAIN, &contract, MINT_SELECTOR, 120, 128, DEFAULT_REGION_OFFSET, &fields, &seed, 0, 0).unwrap();
 
         assert_eq!(order.message.len(), 88 + 16 + 32, "the wide amount widens the preimage to 136 bytes");
         assert_eq!(&order.message[88..96], &100u64.to_be_bytes(), "the amount low word is first");
         assert_eq!(&order.message[96..104], &1u64.to_be_bytes(), "the amount high word is second");
         assert_eq!(&order.message[104..136], &to, "the address follows the wide amount");
-        assert_eq!(word_at(&order.user_memory, 128), 100, "the argument region carries the low word");
-        assert_eq!(word_at(&order.user_memory, 136), 1, "then the high word");
-        assert_eq!(&order.user_memory[80..112], &to);
+        assert_eq!(word_at(&order.user_memory, 136), 100, "the argument region carries the low word");
+        assert_eq!(word_at(&order.user_memory, 144), 1, "then the high word");
+        assert_eq!(&order.user_memory[88..120], &to);
         assert!(ml_dsa::verify(
             order.public_key.as_slice().try_into().unwrap(),
             &order.message,
@@ -905,10 +905,10 @@ mod tests {
         let to = [0xABu8; 32];
         let to_hex: String = to.iter().map(|b| format!("{b:02x}")).collect();
         let fields = vec![
-            TypedField { offset: 128, width: 16, value: "18446744073709551716".to_string() },
-            TypedField { offset: 80, width: 32, value: to_hex },
+            TypedField { offset: 136, width: 16, value: "18446744073709551716".to_string() },
+            TypedField { offset: 88, width: 32, value: to_hex },
         ];
-        let order = build_order_from_typed(TEST_CHAIN, &contract, MINT_SELECTOR, 112, 120, DEFAULT_REGION_OFFSET, &fields, &seed, 0, 0).unwrap();
+        let order = build_order_from_typed(TEST_CHAIN, &contract, MINT_SELECTOR, 120, 128, DEFAULT_REGION_OFFSET, &fields, &seed, 0, 0).unwrap();
         assert_eq!(order.message.len(), 88 + 16 + 32, "the descriptor width widens the preimage");
         assert_eq!(&order.message[88..96], &100u64.to_be_bytes());
         assert_eq!(&order.message[96..104], &1u64.to_be_bytes());
@@ -1047,7 +1047,7 @@ mod tests {
             layout.scheme_off,
             layout.ptr_off,
             layout.region_off,
-            &[FieldArg { offset: 96, value: FieldValue::Word(7) }],
+            &[FieldArg { offset: 104, value: FieldValue::Word(7) }],
             &seed,
             0,
             3,
@@ -1064,16 +1064,16 @@ mod tests {
         let args = build_call_args(
             selector,
             &[
-                FieldArg { offset: 80, value: FieldValue::Address(to) },
-                FieldArg { offset: 112, value: FieldValue::Word(200) },
+                FieldArg { offset: 88, value: FieldValue::Address(to) },
+                FieldArg { offset: 120, value: FieldValue::Word(200) },
             ],
         )
         .unwrap();
         assert_eq!(&args[..4], &selector);
         let mem = &args[4..];
         assert!(mem[..CONTRACT_CONTEXT_BYTES as usize].iter().all(|&b| b == 0), "context left for the node");
-        assert_eq!(&mem[80..112], &to);
-        assert_eq!(word_at(mem, 112), 200);
+        assert_eq!(&mem[88..120], &to);
+        assert_eq!(word_at(mem, 120), 200);
     }
 
     #[test]
@@ -1082,17 +1082,17 @@ mod tests {
         let args = build_call_args(
             selector,
             &[
-                FieldArg { offset: 80, value: FieldValue::name("alice") },
-                FieldArg { offset: 120, value: FieldValue::Word(2) },
+                FieldArg { offset: 88, value: FieldValue::name("alice") },
+                FieldArg { offset: 128, value: FieldValue::Word(2) },
             ],
         )
         .unwrap();
         let mem = &args[4..];
         assert!(mem[..CONTRACT_CONTEXT_BYTES as usize].iter().all(|&b| b == 0), "context stays for the node");
-        assert_eq!(&mem[80..85], b"alice", "the label bytes lead the window");
-        assert!(mem[85..112].iter().all(|&b| b == 0), "the window tail is zero padded");
-        assert_eq!(word_at(mem, 112), 5, "the length word sits directly after the window");
-        assert_eq!(word_at(mem, 120), 2, "the following word argument lands after the name");
+        assert_eq!(&mem[88..93], b"alice", "the label bytes lead the window");
+        assert!(mem[93..120].iter().all(|&b| b == 0), "the window tail is zero padded");
+        assert_eq!(word_at(mem, 120), 5, "the length word sits directly after the window");
+        assert_eq!(word_at(mem, 128), 2, "the following word argument lands after the name");
         // The client's read key equals SHA3 of the bare label, the same key the machine derives.
         assert_eq!(name_key("alice"), sha3::sha3_256(b"alice"));
     }
@@ -1101,11 +1101,11 @@ mod tests {
     fn a_name_label_wider_than_the_window_is_refused_not_truncated() {
         let selector = [0x2d, 0xfb, 0xa5, 0xfc];
         let long = "a".repeat(NAME_WINDOW + 1);
-        let err = build_call_args(selector, &[FieldArg { offset: 80, value: FieldValue::name(&long) }])
+        let err = build_call_args(selector, &[FieldArg { offset: 88, value: FieldValue::name(&long) }])
             .unwrap_err();
         assert!(err.contains("thirty two bytes"), "an over wide label is refused, not silently truncated");
         let exact = "a".repeat(NAME_WINDOW);
-        assert!(build_call_args(selector, &[FieldArg { offset: 80, value: FieldValue::name(&exact) }]).is_ok());
+        assert!(build_call_args(selector, &[FieldArg { offset: 88, value: FieldValue::name(&exact) }]).is_ok());
     }
 
     #[test]
