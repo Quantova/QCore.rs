@@ -307,6 +307,14 @@ pub fn valid_address(address: &str) -> bool {
     matches!(qtv_idfmt::parse_address(address), Ok(payload) if payload.len() == ADDRESS_PAYLOAD_LEN)
 }
 
+pub fn address_payload(address: &str) -> Result<[u8; 32], String> {
+    let payload = qtv_idfmt::parse_address(address).map_err(|_| "not a Q1 address".to_string())?;
+    payload
+        .as_slice()
+        .try_into()
+        .map_err(|_| "the address is not the canonical thirty two byte width".to_string())
+}
+
 fn word_list() -> Vec<&'static str> {
     include_str!("english.txt").lines().collect()
 }
@@ -640,6 +648,14 @@ mod client {
 
         pub fn events(&self, height: u64) -> Result<Vec<contract::ContractEvent>, String> {
             contract::parse_events(&self.rpc("get_events", contract::events_body(height))?)
+        }
+
+        pub fn asset_balance(&self, issuer: &str, holder: &str) -> Result<u128, String> {
+            if !valid_address(issuer) || !valid_address(holder) {
+                return Err("the issuer or holder is not a Q1 address".to_string());
+            }
+            let response = self.rpc("get_asset_balance", contract::asset_balance_body(issuer, holder))?;
+            field_u128(&json::parse(&response)?, "balance")
         }
 
         pub fn contract_nonce(&self, contract: &str, signer: &[u8; 32]) -> Result<u64, String> {
