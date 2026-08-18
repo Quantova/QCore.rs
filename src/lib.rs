@@ -766,6 +766,8 @@ mod client {
             fields: &[contract::FieldArg],
             owner_seed: &[u8; SEED_LEN],
             owner_index: u64,
+            value: u64,
+            in_asset: Option<&str>,
             meter_limit: u64,
             max_fee: u128,
         ) -> Result<(SignedTransfer, Submit, contract::SignedOrderCall), String> {
@@ -789,16 +791,17 @@ mod client {
             )?;
             let caller = account_address(caller_seed, caller_index);
             let account = self.account(&caller)?;
-            let signed = sign_call(
-                caller_seed,
-                caller_index,
-                contract,
-                order.call_args.clone(),
-                account.nonce,
-                meter_limit,
-                info.transfer_fee,
-                chain_id,
-            )?;
+            let args = order.call_args.clone();
+            let signed = match in_asset {
+                Some(issuer) => sign_asset_call(
+                    caller_seed, caller_index, contract, args, issuer, value, account.nonce,
+                    meter_limit, info.transfer_fee, chain_id,
+                )?,
+                None => sign_payable_call(
+                    caller_seed, caller_index, contract, args, value, account.nonce, meter_limit,
+                    info.transfer_fee, chain_id,
+                )?,
+            };
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome, order))
         }
