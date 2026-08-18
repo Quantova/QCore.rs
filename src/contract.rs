@@ -69,6 +69,14 @@ pub fn map_slot_key(map_domain_tag: u64, key_address: &[u8; 32]) -> [u8; 32] {
     sha3::sha3_256(&input)
 }
 
+pub fn map_addr_word_key(map_domain_tag: u64, key_address: &[u8; 32], word: u64) -> [u8; 32] {
+    let mut input = Vec::with_capacity(WORD as usize + 32 + WORD as usize);
+    input.extend_from_slice(&map_domain_tag.to_be_bytes());
+    input.extend_from_slice(key_address);
+    input.extend_from_slice(&word.to_be_bytes());
+    sha3::sha3_256(&input)
+}
+
 // a Q_Name occupies a thirty two byte plaintext label window followed by an eight byte big endian
 // length word, so a field placed at an offset spans forty bytes: the window at the offset and the
 // length at offset + 32.
