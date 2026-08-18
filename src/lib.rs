@@ -162,8 +162,6 @@ pub fn sign_call(
     sign_payable_call(seed, index, target, args, 0, nonce, meter_limit, fee, chain_id)
 }
 
-/// Sign a call that carries a non native asset into the contract. The asset is named by its issuer
-/// address and `amount` is debited from the sender in that asset rather than in QTOV.
 #[allow(clippy::too_many_arguments)]
 pub fn sign_asset_call(
     seed: &[u8; SEED_LEN],
