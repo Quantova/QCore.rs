@@ -40,3 +40,6 @@ qtv-wipe = { path = "../Quantova-Chain/crates/qtv-wipe" }
 # scalar slot key encoding, read as constants so the client never restates a size the machine
 # would then reject. Only the `abi` module is used, which is pure and compiles to WebAssembly.
 qtv-vm = { path = "../QVM/crates/qtv-vm" }
+
+[profile.release]
+overflow-checks = true
