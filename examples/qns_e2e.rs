@@ -356,6 +356,8 @@ fn run() -> Result<(), String> {
         &[FieldArg { offset: WITHDRAW_AMOUNT_OFF, value: FieldValue::Word(vault_now) }],
         &STRANGER_SEED,
         0,
+        0,
+        None,
         METER,
         fee,
     )?;
@@ -381,6 +383,8 @@ fn run() -> Result<(), String> {
         &[FieldArg { offset: WITHDRAW_AMOUNT_OFF, value: FieldValue::Word(sweep) }],
         &OWNER_A_SEED,
         0,
+        0,
+        None,
         METER,
         fee,
     )?;
