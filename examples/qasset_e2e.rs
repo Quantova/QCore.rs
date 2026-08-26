@@ -111,6 +111,8 @@ fn run() -> Result<(), String> {
         ],
         &DEPLOYER_SEED,
         0,
+        0,
+        None,
         METER,
         fee,
     )?;
@@ -175,6 +177,8 @@ fn run() -> Result<(), String> {
         ],
         &STRANGER_SEED,
         0,
+        0,
+        None,
         METER,
         fee,
     )?;
