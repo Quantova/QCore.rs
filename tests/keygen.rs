@@ -1,8 +1,6 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! A generated master seed must be real entropy, thirty two bytes, and it must derive a valid
-
 #![cfg(feature = "client")]
 
 use qcore::{account_address, generate_seed, valid_address};

@@ -17,7 +17,6 @@ const TRANSFER_SELECTOR: [u8; 4] = [0xf8, 0xe2, 0xf9, 0xcd];
 const MINTED_SELECTOR: [u8; 4] = [0x23, 0xb2, 0xd7, 0x61];
 const TRANSFERRED_SELECTOR: [u8; 4] = [0x50, 0xed, 0x06, 0x4a];
 
-// Caller args begin at byte 80, past the 80 byte host context.
 const ORDER_TO_OFF: u64 = 80;
 const ORDER_CONTENT_OFF: u64 = 112;
 const ORDER_SCHEME_OFF: u64 = 144;
@@ -224,6 +223,8 @@ fn mint_call(
         ],
         admin_seed,
         0,
+        0,
+        None,
         METER,
         fee,
     )

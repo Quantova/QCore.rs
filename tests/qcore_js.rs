@@ -1,8 +1,6 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! The JavaScript core is generated over this Rust core, so the two must agree byte for byte on
-
 use qcore::{account_address, chain_id_from_name, sign_call, LOCAL_CHAIN_ID, SEED_LEN};
 use qtv_tx::{sign, Body, Call, TESTNET_CHAIN_ID};
 
@@ -10,7 +8,6 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The seed the cross language conformance vectors share.
 fn shared_seed() -> [u8; SEED_LEN] {
     let mut seed = [0u8; SEED_LEN];
     for (i, byte) in seed.iter_mut().enumerate() {

@@ -1,8 +1,6 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! The convenience client must never sign a transfer whose fee the gateway reports above the
-
 #![cfg(feature = "client")]
 
 use std::io::{Read, Write};
@@ -17,7 +15,6 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-/// Read one HTTP request, headers and the declared body, so the client's write finishes before the
 fn read_request(stream: &mut TcpStream) -> String {
     let mut buf = Vec::new();
     let mut tmp = [0u8; 1024];
@@ -45,7 +42,6 @@ fn read_request(stream: &mut TcpStream) -> String {
     String::from_utf8_lossy(&buf).to_string()
 }
 
-/// Start a loopback gateway that answers the `/v1` methods with canned JSON, reporting the given
 fn spawn_gateway(fee_quon: u128) -> (u16, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let port = listener.local_addr().unwrap().port();
@@ -87,7 +83,6 @@ fn spawn_gateway(fee_quon: u128) -> (u16, Arc<AtomicUsize>) {
                 body
             );
             let _ = stream.write_all(response.as_bytes());
-            // Drop the stream, which closes it, so the client sees end of stream and stops reading.
         }
     });
     (port, submits)

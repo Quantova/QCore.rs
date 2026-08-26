@@ -11,18 +11,15 @@ const DEPLOYER_SEED: [u8; 32] = [11u8; 32];
 const HOLDER2_SEED: [u8; 32] = [33u8; 32];
 const STRANGER_SEED: [u8; 32] = [22u8; 32];
 
-// ground truth: quanta-cli emit
 const MINT_SELECTOR: [u8; 4] = [0x3e, 0xcc, 0xb9, 0xbc];
 const TRANSFER_SELECTOR: [u8; 4] = [0xb8, 0x4d, 0xbd, 0x2c];
 const MINTED_SELECTOR: [u8; 4] = [0xaf, 0x05, 0xf8, 0x0a];
 const TRANSFERRED_SELECTOR: [u8; 4] = [0xd2, 0x63, 0xee, 0x7a];
 
-// Caller args begin at byte 80, past the 80 byte host context.
 const MINT_TO_OFF: u64 = 80;
 const MINT_SCHEME_OFF: u64 = 112;
 const MINT_PTR_OFF: u64 = 120;
 const MINT_AMOUNT_OFF: u64 = 128;
-// amount is a u128: low word then high word.
 const MINT_AMOUNT_HI_OFF: u64 = MINT_AMOUNT_OFF + 8;
 const XFER_TO_OFF: u64 = 80;
 const XFER_AMOUNT_OFF: u64 = 112;

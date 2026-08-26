@@ -7,7 +7,6 @@ use qtv_wipe::Zeroizing;
 
 use crate::json::{self, object, Json};
 
-// mirrors the node's CONTRACT_CONTEXT_BYTES
 pub const CONTRACT_CONTEXT_BYTES: u64 = 88;
 
 const WORD: u64 = 8;
@@ -15,7 +14,6 @@ const WORD: u64 = 8;
 const SIGNED_MSG_TAG: &[u8; 8] = b"QTVSGN01";
 const NONCE_TAG: &[u8; 8] = b"QTVNONCE";
 
-// compiler's own MSG_*_OFF offsets
 const MSG_TAG_OFF: usize = 0;
 const MSG_CONTRACT_OFF: usize = 8;
 const MSG_SELECTOR_OFF: usize = 40;
@@ -23,18 +21,12 @@ const MSG_SIGNER_OFF: usize = 48;
 const MSG_NONCE_OFF: usize = 80;
 const MSG_FIELDS_OFF: usize = 88;
 
-// scratch offset avoiding compiled regions
 pub const DEFAULT_REGION_OFFSET: u64 = 8192;
 
-// The chain loads a call's memory image into the machine's fixed sized memory, so a call whose declared
-// argument offsets or verify region would need more than that is invalid. Reject it before allocating
-// rather than let a hostile contract descriptor drive a huge allocation and abort the wallet.
 const MAX_USER_MEMORY: usize = 65536;
 
-// the node's own tag
 const DEPLOY_PARAMS_TAG: &[u8; 8] = b"QDEPLOY1";
 
-// the compiler's own sentinel
 const GENESIS_PARAM_SENTINEL: &[u8; 8] = b"QGENSNTL";
 
 pub fn signer_address(scheme: u8, public_key: &[u8]) -> [u8; 32] {
@@ -77,9 +69,6 @@ pub fn map_addr_word_key(map_domain_tag: u64, key_address: &[u8; 32], word: u64)
     sha3::sha3_256(&input)
 }
 
-// a Q_Name occupies a thirty two byte plaintext label window followed by an eight byte big endian
-// length word, so a field placed at an offset spans forty bytes: the window at the offset and the
-// length at offset + 32.
 const NAME_WINDOW: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,14 +80,10 @@ pub enum FieldValue {
 }
 
 impl FieldValue {
-    /// The bare label bytes of a Q_Name field, the identity the chain hashes and the client and the
     pub fn name(label: &str) -> FieldValue {
         FieldValue::Name(label.as_bytes().to_vec())
     }
 
-    /// A u128 signed field: the low word then the high word, each big endian, exactly the two word
-    /// order the contract reconstructs before it verifies the owner's signature. Packing a u128 as a
-    /// single eight byte word instead would sign a shorter message than the contract rebuilds.
     pub fn wide(value: u128) -> FieldValue {
         let mut out = [0u8; 16];
         out[..8].copy_from_slice(&(value as u64).to_be_bytes());
@@ -130,8 +115,6 @@ impl FieldValue {
         }
     }
 
-    // a label wider than the window cannot be placed without dropping bytes, so refuse it rather
-    // than sign a truncated name the caller never typed
     fn ensure_fits(&self) -> Result<(), String> {
         if let FieldValue::Name(label) = self {
             if label.len() > NAME_WINDOW {
@@ -142,12 +125,10 @@ impl FieldValue {
     }
 }
 
-/// The thirty two byte storage key a Q_Name resolves to: SHA3 of the bare label bytes, the same key
 pub fn name_key(label: &str) -> [u8; 32] {
     sha3::sha3_256(label.as_bytes())
 }
 
-/// The thirty two byte key region a token id resolves to: the id big endian in the leading word, the
 pub fn id_key(id: u64) -> [u8; 32] {
     let mut region = [0u8; 32];
     region[..WORD as usize].copy_from_slice(&id.to_be_bytes());
@@ -230,9 +211,6 @@ pub struct SignedOrderCall {
 }
 
 #[allow(clippy::too_many_arguments)]
-/// One signed order field as a client reads it from the interface descriptor: the argument offset, the
-/// byte width, and the value as text. The width selects how the value is typed, so the client never has
-/// to know the field encoding, and a wide amount or an address is signed at its true width.
 #[derive(Debug, Clone)]
 pub struct TypedField {
     pub offset: u64,
@@ -257,14 +235,10 @@ fn field_value_of_width(width: u64, value: &str) -> Result<FieldValue, String> {
                 .map_err(|_| "an address field is thirty two bytes of hex".to_string())?;
             Ok(FieldValue::Address(addr))
         }
-        // No descriptor emits a forty byte signed field and the contract never reconstructs a
-        // contiguous name key, so a name width here would sign a preimage no chain accepts. Refuse it.
         _ => Err(format!("a signed field width of {width} is not supported")),
     }
 }
 
-/// Build a signed order from the typed field list the descriptor describes, in message order. This is
-/// the path clients use once they read `signed_orders` and the per field `width` from the `.qface`.
 #[allow(clippy::too_many_arguments)]
 pub fn build_order_from_typed(
     chain_id: u64,
@@ -682,12 +656,8 @@ mod tests {
     const BUMP_SELECTOR: [u8; 4] = [0x6c, 0xad, 0x12, 0xfc];
     const BUMPED_SELECTOR: [u8; 4] = [0x6e, 0x82, 0x53, 0x1d];
 
-    // A fixed non zero chain id for the tests, folded into the order domain tag exactly as the node
-    // injects its own chain id at @chain and the compiled entry rebuilds the tag with it.
     const TEST_CHAIN: u64 = 0x0123_4567_89AB_CDEF;
 
-    // The caller supplied argument region begins after the eighty byte host context: @caller,
-    // @contract, @time, and @chain. Order fields sit at or above eighty.
     fn counter_layout() -> OrderLayout {
         OrderLayout::new(88, 96, vec![104])
     }
@@ -779,11 +749,6 @@ mod tests {
         ));
     }
 
-    // The exact chain bound order preimage bytes for fixed inputs. The verifier crate
-    // (quanta-codegen, tests/chain_bind.rs) pins this identical vector, so the signer and the entry
-    // that rebuilds the preimage cannot drift. chain 0x0123456789abcdef, contract 0x33*32, selector
-    // BUMP, signer 0x11*32, nonce 7, one word field 42. The leading tag word is QTVSGN01 xored with
-    // the chain id, then the contract, the selector word, the signer, the nonce, and the field.
     const PINNED_ORDER_PREIMAGE: [u8; 96] = [
         0x50, 0x77, 0x13, 0x34, 0xce, 0xe5, 0xfd, 0xde, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33,
         0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33,
@@ -868,13 +833,10 @@ mod tests {
 
     #[test]
     fn a_typed_order_binds_a_wide_u128_field_at_full_width() {
-        // The QAsset mint conformance case: a u128 amount then a whole address, signed in message
-        // order at the frozen argument offsets (to@88, amount@136). The contract reconstructs
-        // 88 + 16 + 32 = 136 bytes; packing the amount as one word would sign 128 and be rejected.
         let seed = [4u8; crate::SEED_LEN];
         let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
         let to = [0xABu8; 32];
-        let amount: u128 = (1u128 << 64) + 100; // low word 100, high word 1
+        let amount: u128 = (1u128 << 64) + 100;
         let fields = vec![
             FieldArg { offset: 136, value: FieldValue::wide(amount) },
             FieldArg { offset: 88, value: FieldValue::Address(to) },
@@ -898,8 +860,6 @@ mod tests {
 
     #[test]
     fn build_order_from_typed_binds_a_wide_field_by_its_descriptor_width() {
-        // The client path: fields in message order, each carrying only its width and text value as the
-        // .qface reports them. Width 16 must type the amount as a full u128, not an eight byte word.
         let seed = [4u8; crate::SEED_LEN];
         let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
         let to = [0xABu8; 32];
@@ -995,7 +955,6 @@ mod tests {
 
     #[test]
     fn a_field_offset_past_the_contract_memory_is_refused_not_allocated() {
-        // A hostile contract descriptor offset must error before allocating, never drive a huge alloc.
         let seed = [4u8; crate::SEED_LEN];
         let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
         let fields = vec![TypedField { offset: 1 << 40, width: 8, value: "1".to_string() }];
@@ -1093,7 +1052,6 @@ mod tests {
         assert!(mem[93..120].iter().all(|&b| b == 0), "the window tail is zero padded");
         assert_eq!(word_at(mem, 120), 5, "the length word sits directly after the window");
         assert_eq!(word_at(mem, 128), 2, "the following word argument lands after the name");
-        // The client's read key equals SHA3 of the bare label, the same key the machine derives.
         assert_eq!(name_key("alice"), sha3::sha3_256(b"alice"));
     }
 
@@ -1114,7 +1072,6 @@ mod tests {
         assert_eq!(&region[..8], &7u64.to_be_bytes(), "the id leads the region big endian");
         assert!(region[8..].iter().all(|&b| b == 0), "the rest of the region is zero");
         assert_ne!(id_key(1), id_key(2), "distinct ids promote to distinct regions");
-        // The map key over the region matches the machine: SHA3 of the map tag then the whole region.
         let base: u64 = 1 << 40;
         assert_eq!(map_slot_key(base, &id_key(7)), {
             let mut input = base.to_be_bytes().to_vec();

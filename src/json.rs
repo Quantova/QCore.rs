@@ -117,7 +117,6 @@ fn write_string(s: &str, out: &mut String) {
     out.push('"');
 }
 
-// limits recursion against hostile input
 const MAX_DEPTH: usize = 128;
 
 pub fn parse(input: &str) -> Result<Json, String> {

@@ -159,14 +159,11 @@ fn a_configured_mainnet_is_refused_when_not_acknowledged_whatever_the_gateway_re
 
 #[test]
 fn a_plain_url_client_is_refused_a_mainnet_gateway_until_acknowledged() {
-    // The mainnet gate keys on the chain crate's mainnet id, so the gateway must report that identity.
     let (port, submits) = spawn_gateway(MAINNET_CHAIN_NAME);
     let base = format!("http://127.0.0.1:{port}");
     let seed = [11u8; 32];
     let to = account_address(&seed, 1);
 
-    // With no chosen network and no acknowledgement, a gateway that reports the mainnet chain must not
-    // draw a real value signature: the client refuses before signing and nothing is submitted.
     let client = Client::new(base.clone());
     let err = client
         .transfer(&seed, 0, &to, 1000, 1000)
@@ -174,7 +171,6 @@ fn a_plain_url_client_is_refused_a_mainnet_gateway_until_acknowledged() {
     assert!(err.contains("mainnet"), "the refusal names mainnet: {err}");
     assert_eq!(submits.load(Ordering::SeqCst), 0, "nothing is submitted without acknowledgement");
 
-    // Acknowledging mainnet on a url only client lets it sign and submit.
     let acked = Client::with_network(base.clone(), Network::for_url(base), true);
     let (_signed, outcome) = acked
         .transfer(&seed, 0, &to, 1000, 1000)

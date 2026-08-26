@@ -1,8 +1,6 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! The frozen transaction signing vectors are the cross language source of truth. This test drives
-
 use qcore::json::{self, Json};
 use qcore::{account_address, sign_payable_call, LOCAL_CHAIN_ID, SEED_LEN};
 

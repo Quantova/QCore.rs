@@ -85,9 +85,6 @@ fn cmd_register(args: &[String]) -> Result<(), String> {
         );
     }
     let seed = read_seed(&args[1])?;
-    // The ceiling is the caller's own, never the gateway's reported fee. Passing the reported fee as
-    // the ceiling would compare the fee against itself and sign whatever the gateway asks, which lets
-    // a hostile gateway inflate the registration fee to drain the account.
     let max_fee: u128 = args[2].parse().map_err(|_| "the max fee is not a number")?;
     let (_signed, outcome) = build_client(&args[0], mainnet).register(&seed, 0, max_fee)?;
     match outcome {
@@ -206,9 +203,6 @@ fn to_hex(bytes: &[u8]) -> String {
 }
 
 fn read_seed(source: &str) -> Result<Zeroizing<[u8; 32]>, String> {
-    // Resolve the seed from a safe source so it need not sit in argv, where the process list and
-    // shell history would expose it. @file reads it from a file, - reads a line from stdin, env:VAR
-    // reads it from an environment variable, and a bare value is still accepted with a warning.
     let hex: Zeroizing<String> = Zeroizing::new(if let Some(var) = source.strip_prefix("env:") {
         std::env::var(var).map_err(|_| format!("the environment variable {var} is not set"))?
     } else if let Some(path) = source.strip_prefix('@') {

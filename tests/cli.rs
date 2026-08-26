@@ -1,8 +1,6 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! The terminal client is user facing, so its address prose must name the uppercase Q1 form. The
-
 #![cfg(feature = "client")]
 
 use std::process::Command;

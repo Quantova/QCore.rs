@@ -153,7 +153,6 @@ fn run() -> Result<(), String> {
     conservation(&client, &contract, fees_taken, swept, "after deploy")?;
 
     println!("\n--- tier pricing: one year each, distinct label lengths ---");
-    // A three character label at base_3.
     register(&client, &OWNER_A_SEED, &contract, "sol", 1, fee, &a_id)?;
     fees_taken += BASE_3;
     let e_sol = expiry_of(&client, &contract, "sol")?;
@@ -163,13 +162,11 @@ fn run() -> Result<(), String> {
     conservation(&client, &contract, fees_taken, swept, "after sol (3 char, base_3)")?;
     tier_charged(&client, &contract, BASE_3, "sol", 3)?;
 
-    // A four character label at base_4.
     register(&client, &OWNER_A_SEED, &contract, "jeff", 1, fee, &a_id)?;
     fees_taken += BASE_4;
     conservation(&client, &contract, fees_taken, swept, "after jeff (4 char, base_4)")?;
     tier_charged(&client, &contract, BASE_4, "jeff", 4)?;
 
-    // A five character label owned by B at base_5_plus.
     register(&client, &OWNER_B_SEED, &contract, "alice", 1, fee, &b_id)?;
     fees_taken += BASE_5_PLUS;
     conservation(&client, &contract, fees_taken, swept, "after alice (5 char, base_5_plus)")?;
@@ -226,7 +223,6 @@ fn run() -> Result<(), String> {
     conservation(&client, &contract, fees_taken, swept, "after set_resolved")?;
 
     println!("\n--- per name ownership negatives ---");
-    // B is a registered owner (of alice) but does not own jeff.
     let b_resolve = qcore::contract::build_call_args(
         SET_RESOLVED_SELECTOR,
         &[
@@ -282,7 +278,6 @@ fn run() -> Result<(), String> {
     }
     println!("[transfer jeff] A -> B, owner_of[jeff] now reads B in full");
 
-    // The prior owner A can no longer act on jeff; the new owner B can.
     let a_resolve_jeff = qcore::contract::build_call_args(
         SET_RESOLVED_SELECTOR,
         &[
@@ -445,7 +440,6 @@ fn register(
 }
 
 fn tier_charged(client: &Client, contract: &str, want: u64, label: &str, len: usize) -> Result<(), String> {
-    // The vault jump is proven by the running conservation total; here we restate the tier for the log.
     println!("    [tier] {label} is {len} characters, charged {want} for one year");
     let expiry = expiry_of(client, contract, label)?;
     if expiry == 0 {

@@ -12,10 +12,8 @@ use qcore::{
 const DEPLOYER_SEED: [u8; 32] = [11u8; 32];
 const STRANGER_SEED: [u8; 32] = [22u8; 32];
 
-// from quanta-cli emit
 const BUMP_SELECTOR: [u8; 4] = [0x6c, 0xad, 0x12, 0xfc];
 const BUMPED_SELECTOR: [u8; 4] = [0x6e, 0x82, 0x53, 0x1d];
-// slot after the owner address
 const COUNT_SLOT: u64 = 4;
 const METER: u64 = 5_000_000;
 
@@ -55,7 +53,6 @@ fn run() -> Result<(), String> {
         return Err("the deployer is not a funded keyed genesis account, it cannot sign".into());
     }
 
-    // 1. deploy
     let container_hex = std::fs::read_to_string(&container_file)
         .map_err(|e| format!("reading the container hex {container_file}: {e}"))?;
     let container = from_hex(container_hex.trim())?;
@@ -78,7 +75,6 @@ fn run() -> Result<(), String> {
         return Err(format!("the freshly deployed count is {count_before}, expected 0"));
     }
 
-    // 2. owner's bump
     let (bump_tx, bump_out, order) = client.call_signed_order(
         &DEPLOYER_SEED,
         0,
@@ -123,7 +119,6 @@ fn run() -> Result<(), String> {
     }
     println!("[bump] PROOF: count advanced {count_before} -> {count_after} and the event recorded the new count");
 
-    // 3. wrong key
     let (wrong_tx, wrong_out, wrong_order) = client.call_signed_order(
         &DEPLOYER_SEED,
         0,
@@ -152,7 +147,6 @@ fn run() -> Result<(), String> {
     }
     println!("[wrong key] PROOF: the contract refused a non owner, count unchanged and no event");
 
-    // 4. replay
     let replay_caller = client.account(&deployer)?;
     let replay = qcore::sign_call(
         &DEPLOYER_SEED,
@@ -202,7 +196,6 @@ fn poll_finality(client: &Client, tx_id: &str) -> Result<u64, String> {
     Err(format!("transaction {tx_id} did not finalise within the window"))
 }
 
-// exact height isolates each block
 fn find_event(
     client: &Client,
     contract: &str,
