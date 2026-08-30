@@ -43,3 +43,7 @@ qtv-vm = { path = "../QVM/crates/qtv-vm" }
 
 [profile.release]
 overflow-checks = true
+
+[lints.clippy]
+too_many_arguments = "allow"
+manual_is_multiple_of = "allow"

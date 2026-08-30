@@ -39,7 +39,10 @@ fn the_frozen_vectors_reproduce_from_the_signing_core() {
         .get("vectors")
         .and_then(Json::as_array)
         .expect("a vectors array");
-    assert!(!vectors.is_empty(), "the vector set carries at least one case");
+    assert!(
+        !vectors.is_empty(),
+        "the vector set carries at least one case"
+    );
 
     for v in vectors {
         let name = text(v, "name");
@@ -49,7 +52,9 @@ fn the_frozen_vectors_reproduce_from_the_signing_core() {
         let args = json::from_hex(&text(v, "args")).expect("the args are hex");
         let nonce = number(v, "nonce");
         let meter_limit = number(v, "meter_limit");
-        let fee = text(v, "fee").parse::<u128>().expect("a fee is a whole number");
+        let fee = text(v, "fee")
+            .parse::<u128>()
+            .expect("a fee is a whole number");
         let value = number(v, "value");
         let chain_id = text(v, "chain_id")
             .parse::<u64>()
@@ -82,14 +87,29 @@ fn the_frozen_vectors_reproduce_from_the_signing_core() {
         .unwrap();
         assert_eq!(signed.from, text(v, "from"), "{name} from");
         assert_eq!(signed.tx_id, text(v, "tx_id"), "{name} transaction id");
-        assert_eq!(hex(&signed.tx_bytes), text(v, "tx_bytes"), "{name} signed bytes");
+        assert_eq!(
+            hex(&signed.tx_bytes),
+            text(v, "tx_bytes"),
+            "{name} signed bytes"
+        );
 
         let lowered = target.to_ascii_lowercase();
         let recased = sign_payable_call(
-            &seed, index, &lowered, args, value, nonce, meter_limit, fee, chain_id,
+            &seed,
+            index,
+            &lowered,
+            args,
+            value,
+            nonce,
+            meter_limit,
+            fee,
+            chain_id,
         )
         .unwrap();
-        assert_eq!(recased.tx_bytes, signed.tx_bytes, "{name} case holds the bytes");
+        assert_eq!(
+            recased.tx_bytes, signed.tx_bytes,
+            "{name} case holds the bytes"
+        );
         assert_eq!(recased.tx_id, signed.tx_id, "{name} case holds the id");
     }
 }

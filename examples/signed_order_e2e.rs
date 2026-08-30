@@ -5,9 +5,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use qcore::contract::{event_word, OrderLayout};
-use qcore::{
-    account_address, contract_address, vm_deploy_address, Client, Submit, TxStatus,
-};
+use qcore::{account_address, contract_address, vm_deploy_address, Client, Submit, TxStatus};
 
 const DEPLOYER_SEED: [u8; 32] = [11u8; 32];
 const STRANGER_SEED: [u8; 32] = [22u8; 32];
@@ -29,7 +27,9 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
-    let url = args.next().ok_or("usage: signed_order_e2e <gateway_url> <container_hex_file> [step]")?;
+    let url = args
+        .next()
+        .ok_or("usage: signed_order_e2e <gateway_url> <container_hex_file> [step]")?;
     let container_file = args
         .next()
         .ok_or("usage: signed_order_e2e <gateway_url> <container_hex_file> [step]")?;
@@ -48,7 +48,10 @@ fn run() -> Result<(), String> {
     let deployer = account_address(&DEPLOYER_SEED, 0);
     let account = client.account(&deployer)?;
     println!("deployer {deployer}");
-    println!("  nonce {} balance {} has_key {}", account.nonce, account.balance, account.has_key);
+    println!(
+        "  nonce {} balance {} has_key {}",
+        account.nonce, account.balance, account.has_key
+    );
     if !account.has_key {
         return Err("the deployer is not a funded keyed genesis account, it cannot sign".into());
     }
@@ -57,13 +60,22 @@ fn run() -> Result<(), String> {
         .map_err(|e| format!("reading the container hex {container_file}: {e}"))?;
     let container = from_hex(container_hex.trim())?;
     let deploy_nonce = account.nonce;
-    let (deploy_tx, deploy_out) =
-        client.call(&DEPLOYER_SEED, 0, &vm_deploy_address(), container, METER, fee)?;
+    let (deploy_tx, deploy_out) = client.call(
+        &DEPLOYER_SEED,
+        0,
+        &vm_deploy_address(),
+        container,
+        METER,
+        fee,
+    )?;
     accepted(&deploy_out, "deploy")?;
     let deploy_height = poll_finality(&client, &deploy_tx.tx_id)?;
-    let contract = contract_address(&deployer, deploy_nonce)
-        .ok_or("the deployer is not a q1 address")?;
-    println!("\n[deploy] tx {} finalised at height {deploy_height}", deploy_tx.tx_id);
+    let contract =
+        contract_address(&deployer, deploy_nonce).ok_or("the deployer is not a q1 address")?;
+    println!(
+        "\n[deploy] tx {} finalised at height {deploy_height}",
+        deploy_tx.tx_id
+    );
     println!("[deploy] contract {contract}");
     if client.storage(&contract)?.is_empty() {
         return Err("the contract deployed no storage, the genesis constructor did not run".into());
@@ -72,7 +84,9 @@ fn run() -> Result<(), String> {
     let count_before = client.contract_scalar(&contract, COUNT_SLOT)?;
     println!("[deploy] count before {count_before}");
     if count_before != 0 {
-        return Err(format!("the freshly deployed count is {count_before}, expected 0"));
+        return Err(format!(
+            "the freshly deployed count is {count_before}, expected 0"
+        ));
     }
 
     let (bump_tx, bump_out, order) = client.call_signed_order(
@@ -97,9 +111,16 @@ fn run() -> Result<(), String> {
         order.message.len(),
         qcore::contract::DEFAULT_REGION_OFFSET
     );
-    println!("[bump] call args {} bytes (4 selector + {} memory)", order.call_args.len(), order.user_memory.len());
+    println!(
+        "[bump] call args {} bytes (4 selector + {} memory)",
+        order.call_args.len(),
+        order.user_memory.len()
+    );
     let bump_height = poll_finality(&client, &bump_tx.tx_id)?;
-    println!("[bump] tx {} finalised at height {bump_height}", bump_tx.tx_id);
+    println!(
+        "[bump] tx {} finalised at height {bump_height}",
+        bump_tx.tx_id
+    );
 
     let count_after = client.contract_scalar(&contract, COUNT_SLOT)?;
     println!("[bump] count after {count_after}");
@@ -113,9 +134,14 @@ fn run() -> Result<(), String> {
         .ok_or("the bump recorded no Bumped event")?;
     let (event_height, data) = bumped;
     let value = event_word(&data).ok_or("the Bumped event payload is not one word")?;
-    println!("[bump] Bumped event at height {event_height}, selector {}, value {value}", hex(&BUMPED_SELECTOR));
+    println!(
+        "[bump] Bumped event at height {event_height}, selector {}, value {value}",
+        hex(&BUMPED_SELECTOR)
+    );
     if value != count_after {
-        return Err(format!("the Bumped event carried {value}, expected {count_after}"));
+        return Err(format!(
+            "the Bumped event carried {value}, expected {count_after}"
+        ));
     }
     println!("[bump] PROOF: count advanced {count_before} -> {count_after} and the event recorded the new count");
 
@@ -132,9 +158,15 @@ fn run() -> Result<(), String> {
         fee,
     )?;
     accepted(&wrong_out, "wrong-key bump")?;
-    println!("\n[wrong key] order signed by stranger {}", hex(&wrong_order.signer));
+    println!(
+        "\n[wrong key] order signed by stranger {}",
+        hex(&wrong_order.signer)
+    );
     let wrong_height = poll_finality(&client, &wrong_tx.tx_id)?;
-    println!("[wrong key] tx {} finalised at height {wrong_height}", wrong_tx.tx_id);
+    println!(
+        "[wrong key] tx {} finalised at height {wrong_height}",
+        wrong_tx.tx_id
+    );
     let count_wrong = client.contract_scalar(&contract, COUNT_SLOT)?;
     println!("[wrong key] count {count_wrong}");
     if count_wrong != count_after {
@@ -160,7 +192,10 @@ fn run() -> Result<(), String> {
     )?;
     let replay_out = client.submit(&replay.tx_bytes)?;
     accepted(&replay_out, "replay")?;
-    println!("\n[replay] resubmitted the owner's nonce {} order as tx {}", order.nonce, replay.tx_id);
+    println!(
+        "\n[replay] resubmitted the owner's nonce {} order as tx {}",
+        order.nonce, replay.tx_id
+    );
     let replay_height = poll_finality(&client, &replay.tx_id)?;
     println!("[replay] tx finalised at height {replay_height}");
     let count_replay = client.contract_scalar(&contract, COUNT_SLOT)?;
@@ -173,7 +208,9 @@ fn run() -> Result<(), String> {
     if find_event(&client, &contract, BUMPED_SELECTOR, replay_height)?.is_some() {
         return Err("a replayed order recorded a Bumped event, the nonce failed".into());
     }
-    println!("[replay] PROOF: the contract refused the replayed order, count unchanged and no event");
+    println!(
+        "[replay] PROOF: the contract refused the replayed order, count unchanged and no event"
+    );
 
     Ok(())
 }
@@ -181,7 +218,9 @@ fn run() -> Result<(), String> {
 fn accepted(outcome: &Submit, what: &str) -> Result<(), String> {
     match outcome {
         Submit::Accepted { .. } => Ok(()),
-        Submit::Rejected { reason, .. } => Err(format!("the {what} submission was rejected: {reason}")),
+        Submit::Rejected { reason, .. } => {
+            Err(format!("the {what} submission was rejected: {reason}"))
+        }
     }
 }
 
@@ -193,7 +232,9 @@ fn poll_finality(client: &Client, tx_id: &str) -> Result<u64, String> {
             TxStatus::Unknown => sleep(Duration::from_millis(250)),
         }
     }
-    Err(format!("transaction {tx_id} did not finalise within the window"))
+    Err(format!(
+        "transaction {tx_id} did not finalise within the window"
+    ))
 }
 
 fn find_event(
@@ -220,6 +261,9 @@ fn from_hex(s: &str) -> Result<Vec<u8>, String> {
     }
     (0..s.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| "the container hex is not hex".to_string()))
+        .map(|i| {
+            u8::from_str_radix(&s[i..i + 2], 16)
+                .map_err(|_| "the container hex is not hex".to_string())
+        })
         .collect()
 }

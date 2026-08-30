@@ -32,7 +32,8 @@ pub fn post(base: &str, path: &str, body: &str) -> Result<(u16, String), String>
              unauthenticated and rewritable to drain funds, use a loopback node or a secure tunnel"
         ));
     }
-    let mut stream = TcpStream::connect_timeout(&addr, TIMEOUT).map_err(|e| format!("connect: {e}"))?;
+    let mut stream =
+        TcpStream::connect_timeout(&addr, TIMEOUT).map_err(|e| format!("connect: {e}"))?;
     stream.set_read_timeout(Some(TIMEOUT)).ok();
     stream.set_write_timeout(Some(TIMEOUT)).ok();
     let request = format!(
@@ -90,13 +91,19 @@ fn split_hostport(hostport: &str) -> Result<(&str, u16), String> {
         let (host, after) = rest
             .split_once(']')
             .ok_or("the bracketed host has no closing bracket")?;
-        let port = after.strip_prefix(':').ok_or("the base must be host:port")?;
-        let port = port.parse::<u16>().map_err(|_| "the port is not a number")?;
+        let port = after
+            .strip_prefix(':')
+            .ok_or("the base must be host:port")?;
+        let port = port
+            .parse::<u16>()
+            .map_err(|_| "the port is not a number")?;
         return Ok((host, port));
     }
     let (host, port) = hostport
         .rsplit_once(':')
         .ok_or("the base must be host:port")?;
-    let port = port.parse::<u16>().map_err(|_| "the port is not a number")?;
+    let port = port
+        .parse::<u16>()
+        .map_err(|_| "the port is not a number")?;
     Ok((host, port))
 }

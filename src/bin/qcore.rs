@@ -100,8 +100,12 @@ fn cmd_register(args: &[String]) -> Result<(), String> {
 }
 
 fn cmd_balance(args: &[String]) -> Result<(), String> {
-    let gateway = args.first().ok_or("usage: qcore balance <gateway-url> <address>")?;
-    let address = args.get(1).ok_or("usage: qcore balance <gateway-url> <address>")?;
+    let gateway = args
+        .first()
+        .ok_or("usage: qcore balance <gateway-url> <address>")?;
+    let address = args
+        .get(1)
+        .ok_or("usage: qcore balance <gateway-url> <address>")?;
     if !valid_address(address) {
         return Err("the address is not a Q1 address".to_string());
     }
@@ -124,22 +128,25 @@ fn cmd_send(args: &[String]) -> Result<(), String> {
     let to = &args[2];
     let amount: u64 = args[3].parse().map_err(|_| "the amount is not a number")?;
     let max_fee: u128 = args[4].parse().map_err(|_| "the max fee is not a number")?;
-    let (_signed, outcome) = build_client(&args[0], mainnet).transfer(&seed, 0, to, amount, max_fee)?;
+    let (_signed, outcome) =
+        build_client(&args[0], mainnet).transfer(&seed, 0, to, amount, max_fee)?;
     match outcome {
         Submit::Accepted { state, tx_id } => {
             println!("submitted {tx_id}");
             println!("state     {state}");
             Ok(())
         }
-        Submit::Rejected { reason, .. } => {
-            Err(format!("the node rejected the transfer: {reason}"))
-        }
+        Submit::Rejected { reason, .. } => Err(format!("the node rejected the transfer: {reason}")),
     }
 }
 
 fn cmd_status(args: &[String]) -> Result<(), String> {
-    let gateway = args.first().ok_or("usage: qcore status <gateway-url> <tx-id>")?;
-    let tx_id = args.get(1).ok_or("usage: qcore status <gateway-url> <tx-id>")?;
+    let gateway = args
+        .first()
+        .ok_or("usage: qcore status <gateway-url> <tx-id>")?;
+    let tx_id = args
+        .get(1)
+        .ok_or("usage: qcore status <gateway-url> <tx-id>")?;
     match Client::new(gateway.clone()).transaction(tx_id)? {
         TxStatus::Finalised { height, block } => {
             println!("finalised at height {height} in block {block}")
@@ -155,11 +162,17 @@ fn print_usage() {
     println!();
     println!("usage");
     println!("  qcore new                                             create a wallet, seed, phrase, and address");
-    println!("  qcore address <seed-hex> [index]                      the address for a seed and index");
+    println!(
+        "  qcore address <seed-hex> [index]                      the address for a seed and index"
+    );
     println!("  qcore pubkey <seed-hex> [index]                       the scheme, public key, and address, for genesis");
-    println!("  qcore info <gateway-url>                              the chain id, height, and fee");
+    println!(
+        "  qcore info <gateway-url>                              the chain id, height, and fee"
+    );
     println!("  qcore register [--mainnet] <gateway-url> <seed-hex> <max-fee>     register a funded account's key so it can send");
-    println!("  qcore balance <gateway-url> <address>                 an account balance and nonce");
+    println!(
+        "  qcore balance <gateway-url> <address>                 an account balance and nonce"
+    );
     println!("  qcore send [--mainnet] <gateway-url> <seed-hex> <to> <amount> <max-fee>   sign and submit a transfer");
     println!("  qcore status <gateway-url> <tx-id>                    where a transaction is");
     println!();
@@ -167,9 +180,15 @@ fn print_usage() {
     println!("stdin, or env:VAR to read it from an environment variable. Prefer the last three so");
     println!("the seed never appears in the process list or your shell history.");
     println!();
-    println!("Pass --mainnet on a signing command to bind the client to the Q-main-net-1 network and");
-    println!("acknowledge that the transaction moves real value; the command then refuses to sign if");
-    println!("the gateway does not serve that network. Without it a signing command follows whatever");
+    println!(
+        "Pass --mainnet on a signing command to bind the client to the Q-main-net-1 network and"
+    );
+    println!(
+        "acknowledge that the transaction moves real value; the command then refuses to sign if"
+    );
+    println!(
+        "the gateway does not serve that network. Without it a signing command follows whatever"
+    );
     println!("network the gateway names and does not prompt.");
 }
 
@@ -238,7 +257,9 @@ fn parse_seed(hex: &str) -> Result<Zeroizing<[u8; 32]>, String> {
 
 fn parse_index(arg: Option<&String>) -> Result<u64, String> {
     match arg {
-        Some(value) => value.parse().map_err(|_| "the index is not a number".to_string()),
+        Some(value) => value
+            .parse()
+            .map_err(|_| "the index is not a number".to_string()),
         None => Ok(0),
     }
 }

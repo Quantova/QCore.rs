@@ -14,5 +14,8 @@ fn the_balance_command_names_the_uppercase_q1_form_on_a_bad_address() {
     assert!(!output.status.success(), "a bad address exits non zero");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Q1 address"), "unexpected stderr: {stderr}");
-    assert!(!stderr.contains("q1 address"), "the prose keeps the prefix uppercase");
+    assert!(
+        !stderr.contains("q1 address"),
+        "the prose keeps the prefix uppercase"
+    );
 }

@@ -159,7 +159,17 @@ pub fn sign_call(
     fee: u128,
     chain_id: u64,
 ) -> Result<SignedTransfer, String> {
-    sign_payable_call(seed, index, target, args, 0, nonce, meter_limit, fee, chain_id)
+    sign_payable_call(
+        seed,
+        index,
+        target,
+        args,
+        0,
+        nonce,
+        meter_limit,
+        fee,
+        chain_id,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -187,8 +197,16 @@ pub fn sign_asset_call(
     issuer32.copy_from_slice(&issuer);
     let sender = derive(seed, index);
     let call = Call::new(target.to_string(), args);
-    let body = Body::with_context(sender.address(), nonce, meter_limit, fee, call, amount, chain_id)
-        .carrying(issuer32);
+    let body = Body::with_context(
+        sender.address(),
+        nonce,
+        meter_limit,
+        fee,
+        call,
+        amount,
+        chain_id,
+    )
+    .carrying(issuer32);
     let wrapper = sign(&sender, &body);
     Ok(SignedTransfer {
         from: sender.address(),
@@ -208,7 +226,16 @@ pub fn sign_transfer(
 ) -> Result<SignedTransfer, String> {
     let mut encoder = Encoder::new();
     encoder.put_u64(amount);
-    sign_call(seed, index, to, encoder.into_bytes(), nonce, NATIVE_TRANSFER_METER, fee, chain_id)
+    sign_call(
+        seed,
+        index,
+        to,
+        encoder.into_bytes(),
+        nonce,
+        NATIVE_TRANSFER_METER,
+        fee,
+        chain_id,
+    )
 }
 
 pub fn sign_register(
@@ -268,8 +295,15 @@ pub struct Account {
 
 #[derive(Debug, Clone)]
 pub enum Submit {
-    Accepted { state: String, tx_id: String },
-    Rejected { reason: String, expected: Option<u64>, got: Option<u64> },
+    Accepted {
+        state: String,
+        tx_id: String,
+    },
+    Rejected {
+        reason: String,
+        expected: Option<u64>,
+        got: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -333,7 +367,9 @@ pub fn mnemonic_from_seed(seed: &[u8; SEED_LEN]) -> String {
     }
     bits.chunks(11)
         .map(|chunk| {
-            let index = chunk.iter().fold(0usize, |acc, &bit| (acc << 1) | bit as usize);
+            let index = chunk
+                .iter()
+                .fold(0usize, |acc, &bit| (acc << 1) | bit as usize);
             words[index]
         })
         .collect::<Vec<_>>()
@@ -358,7 +394,9 @@ pub fn seed_from_mnemonic(phrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>, Str
     }
     let mut seed = Zeroizing::new([0u8; SEED_LEN]);
     for (i, byte) in seed.iter_mut().enumerate() {
-        *byte = bits[i * 8..i * 8 + 8].iter().fold(0u8, |acc, &bit| (acc << 1) | bit);
+        *byte = bits[i * 8..i * 8 + 8]
+            .iter()
+            .fold(0u8, |acc, &bit| (acc << 1) | bit);
     }
     let checksum = bits[SEED_LEN * 8..SEED_LEN * 8 + 8]
         .iter()
@@ -427,8 +465,8 @@ pub fn generate_seed() -> Result<Zeroizing<[u8; SEED_LEN]>, String> {
     #[cfg(unix)]
     {
         use std::io::Read;
-        let mut file =
-            std::fs::File::open("/dev/urandom").map_err(|e| format!("open the random source: {e}"))?;
+        let mut file = std::fs::File::open("/dev/urandom")
+            .map_err(|e| format!("open the random source: {e}"))?;
         let mut seed = Zeroizing::new([0u8; SEED_LEN]);
         file.read_exact(&mut *seed)
             .map_err(|e| format!("read the random source: {e}"))?;
@@ -436,9 +474,11 @@ pub fn generate_seed() -> Result<Zeroizing<[u8; SEED_LEN]>, String> {
     }
     #[cfg(not(unix))]
     {
-        Err("generate_seed reads /dev/urandom and runs on unix only, so on another platform draw \
+        Err(
+            "generate_seed reads /dev/urandom and runs on unix only, so on another platform draw \
              thirty two bytes from the platform cryptographic random source and pass them in"
-            .to_string())
+                .to_string(),
+        )
     }
 }
 
@@ -584,8 +624,15 @@ mod client {
             let sender = account_address(seed, index);
             let account = self.account(&sender)?;
             let chain_id = self.signing_chain_id(&info)?;
-            let signed =
-                sign_transfer(seed, index, to, amount, account.nonce, info.transfer_fee, chain_id)?;
+            let signed = sign_transfer(
+                seed,
+                index,
+                to,
+                amount,
+                account.nonce,
+                info.transfer_fee,
+                chain_id,
+            )?;
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome))
         }
@@ -666,8 +713,16 @@ mod client {
             let account = self.account(&sender)?;
             let chain_id = self.signing_chain_id(&info)?;
             let signed = sign_asset_call(
-                seed, index, target, args, asset_issuer, amount, account.nonce, meter_limit,
-                info.transfer_fee, chain_id,
+                seed,
+                index,
+                target,
+                args,
+                asset_issuer,
+                amount,
+                account.nonce,
+                meter_limit,
+                info.transfer_fee,
+                chain_id,
             )?;
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome))
@@ -685,18 +740,27 @@ mod client {
             if !valid_address(issuer) || !valid_address(holder) {
                 return Err("the issuer or holder is not a Q1 address".to_string());
             }
-            let response = self.rpc("get_asset_balance", contract::asset_balance_body(issuer, holder))?;
+            let response = self.rpc(
+                "get_asset_balance",
+                contract::asset_balance_body(issuer, holder),
+            )?;
             field_u128(&json::parse(&response)?, "balance")
         }
 
         pub fn contract_nonce(&self, contract: &str, signer: &[u8; 32]) -> Result<u64, String> {
             let key = crate::contract::nonce_slot_key(signer);
-            Ok(crate::contract::storage_value(&self.storage(contract)?, &key))
+            Ok(crate::contract::storage_value(
+                &self.storage(contract)?,
+                &key,
+            ))
         }
 
         pub fn contract_scalar(&self, contract: &str, slot: u64) -> Result<u64, String> {
             let key = crate::contract::scalar_slot_key(slot);
-            Ok(crate::contract::storage_value(&self.storage(contract)?, &key))
+            Ok(crate::contract::storage_value(
+                &self.storage(contract)?,
+                &key,
+            ))
         }
 
         #[allow(clippy::too_many_arguments)]
@@ -786,20 +850,43 @@ mod client {
             let signer = contract::order_signer(owner_seed, owner_index);
             let nonce = self.contract_nonce(contract, &signer)?;
             let order = contract::build_typed_order_call(
-                chain_id, contract, selector, scheme_off, ptr_off, region_off, fields, owner_seed,
-                owner_index, nonce,
+                chain_id,
+                contract,
+                selector,
+                scheme_off,
+                ptr_off,
+                region_off,
+                fields,
+                owner_seed,
+                owner_index,
+                nonce,
             )?;
             let caller = account_address(caller_seed, caller_index);
             let account = self.account(&caller)?;
             let args = order.call_args.clone();
             let signed = match in_asset {
                 Some(issuer) => sign_asset_call(
-                    caller_seed, caller_index, contract, args, issuer, value, account.nonce,
-                    meter_limit, info.transfer_fee, chain_id,
+                    caller_seed,
+                    caller_index,
+                    contract,
+                    args,
+                    issuer,
+                    value,
+                    account.nonce,
+                    meter_limit,
+                    info.transfer_fee,
+                    chain_id,
                 )?,
                 None => sign_payable_call(
-                    caller_seed, caller_index, contract, args, value, account.nonce, meter_limit,
-                    info.transfer_fee, chain_id,
+                    caller_seed,
+                    caller_index,
+                    contract,
+                    args,
+                    value,
+                    account.nonce,
+                    meter_limit,
+                    info.transfer_fee,
+                    chain_id,
                 )?,
             };
             let outcome = self.submit(&signed.tx_bytes)?;
@@ -850,7 +937,10 @@ mod client {
             key: &[u8; 32],
         ) -> Result<u64, String> {
             let slot = crate::contract::map_slot_key(map_domain_tag, key);
-            Ok(crate::contract::storage_value(&self.storage(contract)?, &slot))
+            Ok(crate::contract::storage_value(
+                &self.storage(contract)?,
+                &slot,
+            ))
         }
 
         pub fn register(
@@ -914,15 +1004,43 @@ mod tests {
     fn a_payable_call_binds_the_value_into_the_signature() {
         let seed = [7u8; SEED_LEN];
         let target = account_address(&seed, 1);
-        let free = sign_call(&seed, 0, &target, vec![1, 2, 3], 5, 1210, 500, LOCAL_CHAIN_ID).unwrap();
-        let payable_zero =
-            sign_payable_call(&seed, 0, &target, vec![1, 2, 3], 0, 5, 1210, 500, LOCAL_CHAIN_ID)
-                .unwrap();
+        let free = sign_call(
+            &seed,
+            0,
+            &target,
+            vec![1, 2, 3],
+            5,
+            1210,
+            500,
+            LOCAL_CHAIN_ID,
+        )
+        .unwrap();
+        let payable_zero = sign_payable_call(
+            &seed,
+            0,
+            &target,
+            vec![1, 2, 3],
+            0,
+            5,
+            1210,
+            500,
+            LOCAL_CHAIN_ID,
+        )
+        .unwrap();
         assert_eq!(free.tx_bytes, payable_zero.tx_bytes);
         assert_eq!(free.tx_id, payable_zero.tx_id);
-        let funded =
-            sign_payable_call(&seed, 0, &target, vec![1, 2, 3], 1000, 5, 1210, 500, LOCAL_CHAIN_ID)
-                .unwrap();
+        let funded = sign_payable_call(
+            &seed,
+            0,
+            &target,
+            vec![1, 2, 3],
+            1000,
+            5,
+            1210,
+            500,
+            LOCAL_CHAIN_ID,
+        )
+        .unwrap();
         assert_ne!(funded.tx_bytes, free.tx_bytes);
         assert_ne!(funded.tx_id, free.tx_id);
     }
@@ -936,9 +1054,18 @@ mod tests {
         let body = Body::with_context(sender.address(), 4, 1210, 750, call, 2500, LOCAL_CHAIN_ID);
         let wrapper = sign(&sender, &body);
         assert!(qtv_tx::verify(&wrapper, sender.public_key()));
-        let signed =
-            sign_payable_call(&seed, 0, &target, vec![9, 9, 9], 2500, 4, 1210, 750, LOCAL_CHAIN_ID)
-                .unwrap();
+        let signed = sign_payable_call(
+            &seed,
+            0,
+            &target,
+            vec![9, 9, 9],
+            2500,
+            4,
+            1210,
+            750,
+            LOCAL_CHAIN_ID,
+        )
+        .unwrap();
         assert_eq!(signed.tx_bytes, to_bytes(&wrapper));
         assert_eq!(signed.tx_id, wrapper.id());
     }
@@ -951,33 +1078,69 @@ mod tests {
 
         let testnet = sign_transfer(&seed, 0, &target, 1000, 5, 500, TESTNET_CHAIN_ID).unwrap();
         let mainnet = sign_transfer(&seed, 0, &target, 1000, 5, 500, MAINNET_CHAIN_ID).unwrap();
-        assert_ne!(testnet.tx_bytes, mainnet.tx_bytes, "the chain id moves the signed bytes");
+        assert_ne!(
+            testnet.tx_bytes, mainnet.tx_bytes,
+            "the chain id moves the signed bytes"
+        );
         assert_ne!(testnet.tx_id, mainnet.tx_id);
 
         let cheap = sign_transfer(&seed, 0, &target, 1000, 5, 500, TESTNET_CHAIN_ID).unwrap();
         let dear = sign_transfer(&seed, 0, &target, 1000, 5, 999, TESTNET_CHAIN_ID).unwrap();
-        assert_ne!(cheap.tx_bytes, dear.tx_bytes, "the fee moves the signed bytes");
+        assert_ne!(
+            cheap.tx_bytes, dear.tx_bytes,
+            "the fee moves the signed bytes"
+        );
 
         let mut encoder = Encoder::new();
         encoder.put_u64(1000);
         let call = Call::new(target.clone(), encoder.into_bytes());
-        let body = Body::with_context(sender.address(), 5, NATIVE_TRANSFER_METER, 500, call, 0, TESTNET_CHAIN_ID);
+        let body = Body::with_context(
+            sender.address(),
+            5,
+            NATIVE_TRANSFER_METER,
+            500,
+            call,
+            0,
+            TESTNET_CHAIN_ID,
+        );
         let wrapper = sign(&sender, &body);
         assert!(qtv_tx::verify(&wrapper, sender.public_key()));
 
         let swapped_chain = qtv_tx::Wrapper::new(
-            Body::with_context(body.sender().to_string(), body.nonce(), body.meter_limit(), body.fee(), body.call().clone(), body.value(), MAINNET_CHAIN_ID),
+            Body::with_context(
+                body.sender().to_string(),
+                body.nonce(),
+                body.meter_limit(),
+                body.fee(),
+                body.call().clone(),
+                body.value(),
+                MAINNET_CHAIN_ID,
+            ),
             wrapper.scheme(),
             wrapper.signature().to_vec(),
         );
-        assert!(!qtv_tx::verify(&swapped_chain, sender.public_key()), "the testnet signature must not verify for mainnet");
+        assert!(
+            !qtv_tx::verify(&swapped_chain, sender.public_key()),
+            "the testnet signature must not verify for mainnet"
+        );
 
         let swapped_fee = qtv_tx::Wrapper::new(
-            Body::with_context(body.sender().to_string(), body.nonce(), body.meter_limit(), 999, body.call().clone(), body.value(), TESTNET_CHAIN_ID),
+            Body::with_context(
+                body.sender().to_string(),
+                body.nonce(),
+                body.meter_limit(),
+                999,
+                body.call().clone(),
+                body.value(),
+                TESTNET_CHAIN_ID,
+            ),
             wrapper.scheme(),
             wrapper.signature().to_vec(),
         );
-        assert!(!qtv_tx::verify(&swapped_fee, sender.public_key()), "the testnet signature must not verify at a swapped fee");
+        assert!(
+            !qtv_tx::verify(&swapped_fee, sender.public_key()),
+            "the testnet signature must not verify at a swapped fee"
+        );
     }
 
     #[test]
@@ -987,7 +1150,8 @@ mod tests {
         let lowered = target.to_ascii_lowercase();
         assert_ne!(target, lowered);
         let upper = sign_call(&seed, 0, &target, vec![4, 2], 9, 1210, 500, LOCAL_CHAIN_ID).unwrap();
-        let lower = sign_call(&seed, 0, &lowered, vec![4, 2], 9, 1210, 500, LOCAL_CHAIN_ID).unwrap();
+        let lower =
+            sign_call(&seed, 0, &lowered, vec![4, 2], 9, 1210, 500, LOCAL_CHAIN_ID).unwrap();
         assert_eq!(upper.tx_bytes, lower.tx_bytes);
         assert_eq!(upper.tx_id, lower.tx_id);
     }
@@ -1018,7 +1182,10 @@ mod tests {
     #[test]
     fn valid_address_rejects_a_payload_wider_than_the_canonical_address() {
         let canonical = account_address(&[7u8; SEED_LEN], 0);
-        assert_eq!(qtv_idfmt::parse_address(&canonical).unwrap().len(), ADDRESS_PAYLOAD_LEN);
+        assert_eq!(
+            qtv_idfmt::parse_address(&canonical).unwrap().len(),
+            ADDRESS_PAYLOAD_LEN
+        );
         assert!(valid_address(&canonical));
         assert!(
             qtv_idfmt::render_address(&[0x11u8; ADDRESS_PAYLOAD_LEN + 1]).is_err(),
@@ -1026,12 +1193,29 @@ mod tests {
         );
         assert!(qtv_idfmt::render_address(&[0x11u8; ADDRESS_PAYLOAD_LEN + 8]).is_err());
         assert!(
-            sign_transfer(&[7u8; SEED_LEN], 0, "not an address", 1000, 0, 500, LOCAL_CHAIN_ID).is_err(),
+            sign_transfer(
+                &[7u8; SEED_LEN],
+                0,
+                "not an address",
+                1000,
+                0,
+                500,
+                LOCAL_CHAIN_ID
+            )
+            .is_err(),
             "a transfer to a non address target is refused before signing"
         );
-        assert!(
-            sign_call(&[7u8; SEED_LEN], 0, "not an address", vec![1, 2], 0, 1210, 500, LOCAL_CHAIN_ID).is_err()
-        );
+        assert!(sign_call(
+            &[7u8; SEED_LEN],
+            0,
+            "not an address",
+            vec![1, 2],
+            0,
+            1210,
+            500,
+            LOCAL_CHAIN_ID
+        )
+        .is_err());
     }
 
     #[test]
@@ -1061,7 +1245,11 @@ mod tests {
             account_address(&seed, 0)
         );
         let mut words: Vec<&str> = phrase.split_whitespace().collect();
-        words[0] = if words[0] == "abandon" { "ability" } else { "abandon" };
+        words[0] = if words[0] == "abandon" {
+            "ability"
+        } else {
+            "abandon"
+        };
         assert!(seed_from_mnemonic(&words.join(" ")).is_err());
     }
 
@@ -1107,7 +1295,9 @@ mod tests {
         );
         let acknowledged = Client::with_network("http://127.0.0.1:8645", network, true);
         assert!(
-            acknowledged.signing_chain_id(&info(MAINNET_CHAIN_NAME)).is_ok(),
+            acknowledged
+                .signing_chain_id(&info(MAINNET_CHAIN_NAME))
+                .is_ok(),
             "acknowledging mainnet lets the same configured client sign"
         );
     }

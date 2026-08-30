@@ -30,7 +30,8 @@ fn read_request(stream: &mut TcpStream) -> String {
                 .lines()
                 .find_map(|l| {
                     let l = l.to_ascii_lowercase();
-                    l.strip_prefix("content-length:").map(|v| v.trim().to_string())
+                    l.strip_prefix("content-length:")
+                        .map(|v| v.trim().to_string())
                 })
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(0);
@@ -72,7 +73,8 @@ fn spawn_gateway(fee_quon: u128) -> (u16, Arc<AtomicUsize>) {
                     .to_string(),
                 "/v1/submit_transaction" => {
                     submits_for_thread.fetch_add(1, Ordering::SeqCst);
-                    "{\"verdict\":\"accepted\",\"state\":\"fresh\",\"tx_id\":\"Qtxabc\"}".to_string()
+                    "{\"verdict\":\"accepted\",\"state\":\"fresh\",\"tx_id\":\"Qtxabc\"}"
+                        .to_string()
                 }
                 _ => "{\"error\":\"unknown_method\",\"message\":\"x\"}".to_string(),
             };

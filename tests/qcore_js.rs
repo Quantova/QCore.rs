@@ -61,7 +61,15 @@ fn the_payable_transaction_reproduces_the_qcore_js_vector() {
     let sender = qtv_account::derive(&seed, 7);
     let target = account_address(&seed, 8);
     let call = Call::new(target, vec![0xde, 0xad, 0xbe, 0xef]);
-    let body = Body::with_context(sender.address(), 3, 21_000, 1_000_000, call, 250_000, TESTNET_CHAIN_ID);
+    let body = Body::with_context(
+        sender.address(),
+        3,
+        21_000,
+        1_000_000,
+        call,
+        250_000,
+        TESTNET_CHAIN_ID,
+    );
     let wrapper = sign(&sender, &body);
     assert!(qtv_tx::verify(&wrapper, sender.public_key()));
     assert_eq!(
@@ -76,8 +84,10 @@ fn the_target_case_never_moves_the_signed_bytes() {
     let upper = account_address(&seed, 8);
     let lower = upper.to_ascii_lowercase();
     assert_ne!(upper, lower);
-    let signed_upper = sign_call(&seed, 7, &upper, vec![1, 2], 3, 21_000, 500, LOCAL_CHAIN_ID).unwrap();
-    let signed_lower = sign_call(&seed, 7, &lower, vec![1, 2], 3, 21_000, 500, LOCAL_CHAIN_ID).unwrap();
+    let signed_upper =
+        sign_call(&seed, 7, &upper, vec![1, 2], 3, 21_000, 500, LOCAL_CHAIN_ID).unwrap();
+    let signed_lower =
+        sign_call(&seed, 7, &lower, vec![1, 2], 3, 21_000, 500, LOCAL_CHAIN_ID).unwrap();
     assert_eq!(signed_upper.tx_bytes, signed_lower.tx_bytes);
     assert_eq!(signed_upper.tx_id, signed_lower.tx_id);
 }
@@ -85,7 +95,16 @@ fn the_target_case_never_moves_the_signed_bytes() {
 #[test]
 fn the_display_string_maps_to_the_signed_chain_id() {
     assert_eq!(chain_id_from_name(qcore::LOCAL_CHAIN_NAME), LOCAL_CHAIN_ID);
-    assert_eq!(chain_id_from_name(qcore::TESTNET_CHAIN_NAME), TESTNET_CHAIN_ID);
-    assert_eq!(chain_id_from_name(qcore::MAINNET_CHAIN_NAME), qcore::MAINNET_CHAIN_ID);
-    assert_eq!(chain_id_from_name("Q-test-net-1"), 4_032_652_574_364_075_694);
+    assert_eq!(
+        chain_id_from_name(qcore::TESTNET_CHAIN_NAME),
+        TESTNET_CHAIN_ID
+    );
+    assert_eq!(
+        chain_id_from_name(qcore::MAINNET_CHAIN_NAME),
+        qcore::MAINNET_CHAIN_ID
+    );
+    assert_eq!(
+        chain_id_from_name("Q-test-net-1"),
+        4_032_652_574_364_075_694
+    );
 }

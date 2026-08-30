@@ -12,5 +12,8 @@ fn a_generated_seed_is_thirty_two_bytes_derives_a_valid_address_and_is_not_const
     assert_eq!(first.len(), 32, "a master seed is thirty two bytes");
     assert_ne!(first, second, "two generated seeds must differ");
     let address = account_address(&first, 0);
-    assert!(valid_address(&address), "a generated seed derives a valid q1 address");
+    assert!(
+        valid_address(&address),
+        "a generated seed derives a valid q1 address"
+    );
 }

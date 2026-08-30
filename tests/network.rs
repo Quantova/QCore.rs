@@ -30,7 +30,8 @@ fn read_request(stream: &mut TcpStream) -> String {
                 .lines()
                 .find_map(|l| {
                     let l = l.to_ascii_lowercase();
-                    l.strip_prefix("content-length:").map(|v| v.trim().to_string())
+                    l.strip_prefix("content-length:")
+                        .map(|v| v.trim().to_string())
                 })
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(0);
@@ -72,7 +73,8 @@ fn spawn_gateway(reported_chain: &'static str) -> (u16, Arc<AtomicUsize>) {
                     .to_string(),
                 "/v1/submit_transaction" => {
                     submits_for_thread.fetch_add(1, Ordering::SeqCst);
-                    "{\"verdict\":\"accepted\",\"state\":\"fresh\",\"tx_id\":\"Qtxabc\"}".to_string()
+                    "{\"verdict\":\"accepted\",\"state\":\"fresh\",\"tx_id\":\"Qtxabc\"}"
+                        .to_string()
                 }
                 _ => "{\"error\":\"unknown_method\",\"message\":\"x\"}".to_string(),
             };
@@ -103,7 +105,11 @@ fn mainnet_at(base: &str) -> Network {
 #[test]
 fn a_testnet_network_carries_its_identifiers() {
     let testnet = Network::testnet();
-    assert_eq!(testnet.chain_id.as_deref(), Some("Q-test-net-1"), "testnet chain id");
+    assert_eq!(
+        testnet.chain_id.as_deref(),
+        Some("Q-test-net-1"),
+        "testnet chain id"
+    );
     assert_eq!(
         testnet.rpc_url.as_deref(),
         Some("https://rpc-testnet.quantova.org"),
@@ -113,7 +119,11 @@ fn a_testnet_network_carries_its_identifiers() {
     assert_eq!(testnet.decimals, 6, "testnet decimals are six");
     assert!(!testnet.is_mainnet, "testnet is not mainnet");
     assert!(Network::mainnet().is_mainnet, "mainnet is flagged");
-    assert_ne!(Network::mainnet().rpc_url, testnet.rpc_url, "mainnet rpc is not the testnet url");
+    assert_ne!(
+        Network::mainnet().rpc_url,
+        testnet.rpc_url,
+        "mainnet rpc is not the testnet url"
+    );
 }
 
 #[test]
@@ -149,7 +159,10 @@ fn a_configured_mainnet_is_refused_when_not_acknowledged_whatever_the_gateway_re
     let err = client
         .transfer(&seed, 0, &to, 1000, 1000)
         .expect_err("a configured mainnet without acknowledgement must refuse to sign");
-    assert!(err.contains("without acknowledging"), "unexpected error: {err}");
+    assert!(
+        err.contains("without acknowledging"),
+        "unexpected error: {err}"
+    );
     assert_eq!(
         submits.load(Ordering::SeqCst),
         0,
@@ -169,7 +182,11 @@ fn a_plain_url_client_is_refused_a_mainnet_gateway_until_acknowledged() {
         .transfer(&seed, 0, &to, 1000, 1000)
         .expect_err("a url client must refuse a mainnet gateway it did not acknowledge");
     assert!(err.contains("mainnet"), "the refusal names mainnet: {err}");
-    assert_eq!(submits.load(Ordering::SeqCst), 0, "nothing is submitted without acknowledgement");
+    assert_eq!(
+        submits.load(Ordering::SeqCst),
+        0,
+        "nothing is submitted without acknowledgement"
+    );
 
     let acked = Client::with_network(base.clone(), Network::for_url(base), true);
     let (_signed, outcome) = acked
@@ -179,7 +196,11 @@ fn a_plain_url_client_is_refused_a_mainnet_gateway_until_acknowledged() {
         Submit::Accepted { .. } => {}
         other => panic!("expected an accepted submission, got {other:?}"),
     }
-    assert_eq!(submits.load(Ordering::SeqCst), 1, "the acknowledged client submits once");
+    assert_eq!(
+        submits.load(Ordering::SeqCst),
+        1,
+        "the acknowledged client submits once"
+    );
 }
 
 #[test]
@@ -189,9 +210,9 @@ fn a_configured_network_refuses_a_mismatched_gateway_chain_id() {
     let client = Client::with_network(base, Network::testnet(), false);
     let seed = [11u8; 32];
     let to = account_address(&seed, 1);
-    let err = client
-        .transfer(&seed, 0, &to, 1000, 1000)
-        .expect_err("a gateway chain id that does not match the configured network must be refused");
+    let err = client.transfer(&seed, 0, &to, 1000, 1000).expect_err(
+        "a gateway chain id that does not match the configured network must be refused",
+    );
     assert!(err.contains("did not choose"), "unexpected error: {err}");
     assert_eq!(
         submits.load(Ordering::SeqCst),

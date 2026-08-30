@@ -24,7 +24,10 @@ fn main() {
     let recipient = account_address(&SEED, 1);
 
     let before = client.account(&sender).expect("account");
-    println!("sender {} nonce {} balance {}", sender, before.nonce, before.balance);
+    println!(
+        "sender {} nonce {} balance {}",
+        sender, before.nonce, before.balance
+    );
 
     let (signed, outcome) = client
         .transfer(&SEED, 0, &recipient, 1000, info.transfer_fee)

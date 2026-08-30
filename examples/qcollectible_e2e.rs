@@ -45,13 +45,20 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
-    let url = args.next().ok_or("usage: qcollectible_e2e <gateway_url> <container_hex_file>")?;
-    let container_file = args.next().ok_or("usage: qcollectible_e2e <gateway_url> <container_hex_file>")?;
+    let url = args
+        .next()
+        .ok_or("usage: qcollectible_e2e <gateway_url> <container_hex_file>")?;
+    let container_file = args
+        .next()
+        .ok_or("usage: qcollectible_e2e <gateway_url> <container_hex_file>")?;
 
     let client = Client::new(url);
     let info = client.node_info()?;
     let fee = info.transfer_fee;
-    println!("network {} at height {}, fee {} {}", info.chain_id, info.head_height, fee, info.denomination);
+    println!(
+        "network {} at height {}, fee {} {}",
+        info.chain_id, info.head_height, fee, info.denomination
+    );
 
     let a = account_address(&OWNER_A_SEED, 0);
     let b = account_address(&OWNER_B_SEED, 0);
@@ -67,24 +74,44 @@ fn run() -> Result<(), String> {
     println!("non owner      {stranger}");
     for (label, addr) in [("A", &a), ("B", &b), ("stranger", &stranger)] {
         let account = client.account(addr)?;
-        println!("  {label} nonce {} balance {} has_key {}", account.nonce, account.balance, account.has_key);
+        println!(
+            "  {label} nonce {} balance {} has_key {}",
+            account.nonce, account.balance, account.has_key
+        );
         if !account.has_key {
-            return Err(format!("{label} is not a funded keyed genesis account, it cannot sign"));
+            return Err(format!(
+                "{label} is not a funded keyed genesis account, it cannot sign"
+            ));
         }
     }
 
-    let container = from_hex(std::fs::read_to_string(&container_file).map_err(|e| format!("reading {container_file}: {e}"))?.trim())?;
-    let (deploy_tx, deploy_out, contract) =
-        client.deploy_with_params(&OWNER_A_SEED, 0, &container, &[DeployParam::Address(a_id)], METER, fee)?;
+    let container = from_hex(
+        std::fs::read_to_string(&container_file)
+            .map_err(|e| format!("reading {container_file}: {e}"))?
+            .trim(),
+    )?;
+    let (deploy_tx, deploy_out, contract) = client.deploy_with_params(
+        &OWNER_A_SEED,
+        0,
+        &container,
+        &[DeployParam::Address(a_id)],
+        METER,
+        fee,
+    )?;
     accepted(&deploy_out, "deploy")?;
     let deploy_height = poll_finality(&client, &deploy_tx.tx_id)?;
-    println!("\n[deploy] tx {} finalised at height {deploy_height}", deploy_tx.tx_id);
+    println!(
+        "\n[deploy] tx {} finalised at height {deploy_height}",
+        deploy_tx.tx_id
+    );
     println!("[deploy] contract {contract}");
     if client.storage(&contract)?.is_empty() {
         return Err("the contract deployed no storage, the genesis constructor did not run".into());
     }
     for (i, want) in a_id.chunks(8).enumerate() {
-        if client.contract_scalar(&contract, i as u64)? != u64::from_be_bytes(want.try_into().unwrap()) {
+        if client.contract_scalar(&contract, i as u64)?
+            != u64::from_be_bytes(want.try_into().unwrap())
+        {
             return Err(format!("admin slot {i} is not A"));
         }
     }
@@ -94,7 +121,16 @@ fn run() -> Result<(), String> {
     println!("[deploy] admin is A in full, supply starts at zero");
 
     println!("\n--- mint two collectibles to A ---");
-    mint(&client, &contract, &OWNER_A_SEED, 1, &a_id, &content_1, fee, "A")?;
+    mint(
+        &client,
+        &contract,
+        &OWNER_A_SEED,
+        1,
+        &a_id,
+        &content_1,
+        fee,
+        "A",
+    )?;
     if supply(&client, &contract)? != 1 || holding(&client, &contract, &a_id)? != 1 {
         return Err("mint of id 1 did not bump supply and A's holding to one".into());
     }
@@ -104,17 +140,41 @@ fn run() -> Result<(), String> {
     }
     println!("[mint 1] supply 1, A holds 1, owner and content read back in full");
 
-    mint(&client, &contract, &OWNER_A_SEED, 2, &a_id, &content_2, fee, "A")?;
+    mint(
+        &client,
+        &contract,
+        &OWNER_A_SEED,
+        2,
+        &a_id,
+        &content_2,
+        fee,
+        "A",
+    )?;
     if supply(&client, &contract)? != 2 || holding(&client, &contract, &a_id)? != 2 {
         return Err("mint of id 2 did not bump supply to two and A's holding to two".into());
     }
     assert_owner(&client, &contract, 2, &a_id, "id 2 owned by A in full")?;
-    assert_owner(&client, &contract, 1, &a_id, "id 1 still owned by A, independent of id 2")?;
+    assert_owner(
+        &client,
+        &contract,
+        1,
+        &a_id,
+        "id 1 still owned by A, independent of id 2",
+    )?;
     println!("[mint 2] supply 2, A holds 2, id 1 and id 2 owners are independent");
 
     println!("\n--- a non admin cannot mint ---");
     let supply_before = supply(&client, &contract)?;
-    let (bad_tx, bad_out, bad_order) = mint_call(&client, &contract, &STRANGER_SEED, &STRANGER_SEED, 3, &stranger_id, &content_1, fee)?;
+    let (bad_tx, bad_out, bad_order) = mint_call(
+        &client,
+        &contract,
+        &STRANGER_SEED,
+        &STRANGER_SEED,
+        3,
+        &stranger_id,
+        &content_1,
+        fee,
+    )?;
     accepted(&bad_out, "non admin mint")?;
     let bad_height = poll_finality(&client, &bad_tx.tx_id)?;
     if read_addr_value(&client, &contract, OWNER_OF_BASE, &id_key(3))? != [0u8; 32]
@@ -140,12 +200,25 @@ fn run() -> Result<(), String> {
     let (xfer_tx, xfer_out) = transfer_call(&client, &contract, &OWNER_A_SEED, 1, &b_id, fee)?;
     accepted(&xfer_out, "transfer A to B")?;
     let xfer_height = poll_finality(&client, &xfer_tx.tx_id)?;
-    assert_owner(&client, &contract, 1, &b_id, "id 1 owned by B in full after transfer")?;
+    assert_owner(
+        &client,
+        &contract,
+        1,
+        &b_id,
+        "id 1 owned by B in full after transfer",
+    )?;
     if holding(&client, &contract, &a_id)? != 1 || holding(&client, &contract, &b_id)? != 1 {
         return Err("the holding counts did not move A 2->1 and B 0->1".into());
     }
-    assert_owner(&client, &contract, 2, &a_id, "id 2 still owned by A, untouched by the move of id 1")?;
-    let evt = find_event(&client, &contract, TRANSFERRED_SELECTOR, xfer_height)?.ok_or("no Transferred event")?;
+    assert_owner(
+        &client,
+        &contract,
+        2,
+        &a_id,
+        "id 2 still owned by A, untouched by the move of id 1",
+    )?;
+    let evt = find_event(&client, &contract, TRANSFERRED_SELECTOR, xfer_height)?
+        .ok_or("no Transferred event")?;
     if word_at(&evt, 0)? != 1 || addr_at(&evt, 8)? != a_id || addr_at(&evt, 40)? != b_id {
         return Err("the Transferred event did not carry id 1, the whole prior owner A, and the whole new owner B".into());
     }
@@ -165,11 +238,18 @@ fn run() -> Result<(), String> {
     let (brj_tx, brj_out) = transfer_call(&client, &contract, &OWNER_B_SEED, 1, &stranger_id, fee)?;
     accepted(&brj_out, "new owner transfer")?;
     let brj_height = poll_finality(&client, &brj_tx.tx_id)?;
-    assert_owner(&client, &contract, 1, &stranger_id, "id 1 owned by the stranger in full after B's transfer")?;
+    assert_owner(
+        &client,
+        &contract,
+        1,
+        &stranger_id,
+        "id 1 owned by the stranger in full after B's transfer",
+    )?;
     if holding(&client, &contract, &b_id)? != 0 || holding(&client, &contract, &stranger_id)? != 1 {
         return Err("B's transfer did not move the holding counts B 1->0 and stranger 0->1".into());
     }
-    find_event(&client, &contract, TRANSFERRED_SELECTOR, brj_height)?.ok_or("no Transferred event for the new owner")?;
+    find_event(&client, &contract, TRANSFERRED_SELECTOR, brj_height)?
+        .ok_or("no Transferred event for the new owner")?;
     println!("[neg2b] new owner B moved id 1 to the stranger in full; B holds 0, stranger holds 1");
     println!("[neg2 ] PROOF: the transfer moved the whole binding, the prior owner is gone and the new owner holds it");
 
@@ -186,14 +266,23 @@ fn mint(
     fee: u128,
     who: &str,
 ) -> Result<(), String> {
-    let (tx, out, order) = mint_call(client, contract, admin_seed, admin_seed, id, to, content, fee)?;
+    let (tx, out, order) = mint_call(
+        client, contract, admin_seed, admin_seed, id, to, content, fee,
+    )?;
     accepted(&out, "mint")?;
     let height = poll_finality(client, &tx.tx_id)?;
     let evt = find_event(client, contract, MINTED_SELECTOR, height)?.ok_or("no Minted event")?;
     if word_at(&evt, 0)? != id || addr_at(&evt, 8)? != *to || addr_at(&evt, 40)? != *content {
-        return Err("the Minted event did not carry the id, the whole recipient, and the whole content".into());
+        return Err(
+            "the Minted event did not carry the id, the whole recipient, and the whole content"
+                .into(),
+        );
     }
-    println!("\n[mint {id}] tx {} finalised at height {height}, signed by {} ({who})", tx.tx_id, hex(&order.signer));
+    println!(
+        "\n[mint {id}] tx {} finalised at height {height}, signed by {} ({who})",
+        tx.tx_id,
+        hex(&order.signer)
+    );
     Ok(())
 }
 
@@ -207,7 +296,14 @@ fn mint_call(
     to: &[u8; 32],
     content: &[u8; 32],
     fee: u128,
-) -> Result<(qcore::SignedTransfer, Submit, qcore::contract::SignedOrderCall), String> {
+) -> Result<
+    (
+        qcore::SignedTransfer,
+        Submit,
+        qcore::contract::SignedOrderCall,
+    ),
+    String,
+> {
     client.call_typed_order(
         caller_seed,
         0,
@@ -217,9 +313,18 @@ fn mint_call(
         ORDER_PTR_OFF,
         qcore::contract::DEFAULT_REGION_OFFSET,
         &[
-            FieldArg { offset: ORDER_ID_OFF, value: FieldValue::Word(id) },
-            FieldArg { offset: ORDER_TO_OFF, value: FieldValue::Address(*to) },
-            FieldArg { offset: ORDER_CONTENT_OFF, value: FieldValue::Address(*content) },
+            FieldArg {
+                offset: ORDER_ID_OFF,
+                value: FieldValue::Word(id),
+            },
+            FieldArg {
+                offset: ORDER_TO_OFF,
+                value: FieldValue::Address(*to),
+            },
+            FieldArg {
+                offset: ORDER_CONTENT_OFF,
+                value: FieldValue::Address(*content),
+            },
         ],
         admin_seed,
         0,
@@ -241,8 +346,14 @@ fn transfer_call(
     let args = qcore::contract::build_call_args(
         TRANSFER_SELECTOR,
         &[
-            FieldArg { offset: TRANSFER_TO_OFF, value: FieldValue::Address(*to) },
-            FieldArg { offset: TRANSFER_ID_OFF, value: FieldValue::Word(id) },
+            FieldArg {
+                offset: TRANSFER_TO_OFF,
+                value: FieldValue::Address(*to),
+            },
+            FieldArg {
+                offset: TRANSFER_ID_OFF,
+                value: FieldValue::Word(id),
+            },
         ],
     )?;
     client.call(caller_seed, 0, contract, args, METER, fee)
@@ -263,7 +374,12 @@ fn addr_word_key(base: u64, key: &[u8; 32], word: u64) -> [u8; 32] {
     qtv_crypto::sha3::sha3_256(&input)
 }
 
-fn read_addr_value(client: &Client, contract: &str, base: u64, key: &[u8; 32]) -> Result<[u8; 32], String> {
+fn read_addr_value(
+    client: &Client,
+    contract: &str,
+    base: u64,
+    key: &[u8; 32],
+) -> Result<[u8; 32], String> {
     let slots = client.storage(contract)?;
     let mut out = [0u8; 32];
     for i in 0..4u64 {
@@ -273,10 +389,20 @@ fn read_addr_value(client: &Client, contract: &str, base: u64, key: &[u8; 32]) -
     Ok(out)
 }
 
-fn assert_owner(client: &Client, contract: &str, id: u64, want: &[u8; 32], what: &str) -> Result<(), String> {
+fn assert_owner(
+    client: &Client,
+    contract: &str,
+    id: u64,
+    want: &[u8; 32],
+    what: &str,
+) -> Result<(), String> {
     let got = read_addr_value(client, contract, OWNER_OF_BASE, &id_key(id))?;
     if &got != want {
-        return Err(format!("{what}: owner_of[{id}] reads {} not {}", hex(&got), hex(want)));
+        return Err(format!(
+            "{what}: owner_of[{id}] reads {} not {}",
+            hex(&got),
+            hex(want)
+        ));
     }
     println!("    [owner] {what}: {}", hex(&got));
     Ok(())
@@ -297,13 +423,18 @@ fn addr_at(data: &[u8], byte_off: usize) -> Result<[u8; 32], String> {
 
 fn address_payload(address: &str) -> Result<[u8; 32], String> {
     let payload = qtv_idfmt::parse_address(address).map_err(|_| "not a Q1 address")?;
-    payload.as_slice().try_into().map_err(|_| "the address payload is not thirty two bytes".to_string())
+    payload
+        .as_slice()
+        .try_into()
+        .map_err(|_| "the address payload is not thirty two bytes".to_string())
 }
 
 fn accepted(outcome: &Submit, what: &str) -> Result<(), String> {
     match outcome {
         Submit::Accepted { .. } => Ok(()),
-        Submit::Rejected { reason, .. } => Err(format!("the {what} submission was rejected: {reason}")),
+        Submit::Rejected { reason, .. } => {
+            Err(format!("the {what} submission was rejected: {reason}"))
+        }
     }
 }
 
@@ -314,10 +445,17 @@ fn poll_finality(client: &Client, tx_id: &str) -> Result<u64, String> {
             TxStatus::Pending | TxStatus::Unknown => sleep(Duration::from_millis(250)),
         }
     }
-    Err(format!("transaction {tx_id} did not finalise within the window"))
+    Err(format!(
+        "transaction {tx_id} did not finalise within the window"
+    ))
 }
 
-fn find_event(client: &Client, contract: &str, selector: [u8; 4], height: u64) -> Result<Option<Vec<u8>>, String> {
+fn find_event(
+    client: &Client,
+    contract: &str,
+    selector: [u8; 4],
+    height: u64,
+) -> Result<Option<Vec<u8>>, String> {
     for event in client.events(height)? {
         if event.contract == contract && event.selector == selector {
             return Ok(Some(event.data));
@@ -336,6 +474,9 @@ fn from_hex(s: &str) -> Result<Vec<u8>, String> {
     }
     (0..s.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| "the container hex is not hex".to_string()))
+        .map(|i| {
+            u8::from_str_radix(&s[i..i + 2], 16)
+                .map_err(|_| "the container hex is not hex".to_string())
+        })
         .collect()
 }

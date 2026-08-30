@@ -1,12 +1,43 @@
 # Copyright 2026 Quantova Inc
 # SPDX-License-Identifier: Apache-2.0 OR MIT
-
 name: ci
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
-  ci:
-    uses: Quantova/Quantova-Ci/.github/workflows/rust-ci.yml@d749dfc210db85b58033507c1464f08c01cba30e  # main @ 2026-08-01
-
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: QCore.rs
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: Quantova/Quantova-Chain
+          ref: 75ff886b0965bf0dfbc3c8378b7e6fccebc711ee
+          path: Quantova-Chain
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: Quantova/QVM
+          ref: 31b9d0e3ff92a3c715936b9293911b4e35529e47
+          path: QVM
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: fmt
+        working-directory: QCore.rs
+        run: cargo fmt --all -- --check
+      - name: clippy
+        working-directory: QCore.rs
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - name: test
+        working-directory: QCore.rs
+        run: cargo test --all-features --locked
