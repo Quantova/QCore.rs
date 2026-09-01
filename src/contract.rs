@@ -7,7 +7,7 @@ use qtv_wipe::Zeroizing;
 
 use crate::json::{self, object, Json};
 
-pub const CONTRACT_CONTEXT_BYTES: u64 = 88;
+pub const CONTRACT_CONTEXT_BYTES: u64 = 120;
 
 const WORD: u64 = 8;
 
@@ -336,8 +336,14 @@ pub fn build_typed_order_call(
         region_off
     };
     let contract_id = contract_id(contract)?;
+    if scheme_off < CONTRACT_CONTEXT_BYTES || ptr_off < CONTRACT_CONTEXT_BYTES {
+        return Err("the scheme or pointer offset falls inside the host call context".to_string());
+    }
     for field in fields {
         field.value.ensure_fits()?;
+        if field.offset < CONTRACT_CONTEXT_BYTES {
+            return Err("a field offset falls inside the host call context".to_string());
+        }
     }
 
     let seed = Zeroizing::new(account_seed(owner_seed, SCHEME_LATTICE, owner_index));
@@ -445,6 +451,9 @@ pub fn build_call_args(selector: [u8; 4], args: &[FieldArg]) -> Result<Vec<u8>, 
     let mut mem_len = CONTRACT_CONTEXT_BYTES;
     for field in args {
         field.value.ensure_fits()?;
+        if field.offset < CONTRACT_CONTEXT_BYTES {
+            return Err("an argument offset falls inside the host call context".to_string());
+        }
         let end = field
             .offset
             .checked_add(field.value.width())
@@ -690,7 +699,7 @@ mod tests {
     const TEST_CHAIN: u64 = 0x0123_4567_89AB_CDEF;
 
     fn counter_layout() -> OrderLayout {
-        OrderLayout::new(88, 96, vec![104])
+        OrderLayout::new(120, 128, vec![136])
     }
 
     #[test]
@@ -725,9 +734,9 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(word_at(&order.user_memory, 88), u64::from(SCHEME_LATTICE));
-        assert_eq!(word_at(&order.user_memory, 96), DEFAULT_REGION_OFFSET);
-        assert_eq!(word_at(&order.user_memory, 104), 5);
+        assert_eq!(word_at(&order.user_memory, 120), u64::from(SCHEME_LATTICE));
+        assert_eq!(word_at(&order.user_memory, 128), DEFAULT_REGION_OFFSET);
+        assert_eq!(word_at(&order.user_memory, 136), 5);
 
         assert!(order.user_memory[..CONTRACT_CONTEXT_BYTES as usize]
             .iter()
@@ -911,11 +920,11 @@ mod tests {
         let amount: u128 = (1u128 << 64) + 100;
         let fields = vec![
             FieldArg {
-                offset: 136,
+                offset: 168,
                 value: FieldValue::wide(amount),
             },
             FieldArg {
-                offset: 88,
+                offset: 136,
                 value: FieldValue::Address(to),
             },
         ];
@@ -954,12 +963,12 @@ mod tests {
             "the address follows the wide amount"
         );
         assert_eq!(
-            word_at(&order.user_memory, 136),
+            word_at(&order.user_memory, 168),
             100,
             "the argument region carries the low word"
         );
-        assert_eq!(word_at(&order.user_memory, 144), 1, "then the high word");
-        assert_eq!(&order.user_memory[88..120], &to);
+        assert_eq!(word_at(&order.user_memory, 176), 1, "then the high word");
+        assert_eq!(&order.user_memory[136..168], &to);
         assert!(ml_dsa::verify(
             order.public_key.as_slice().try_into().unwrap(),
             &order.message,
@@ -976,12 +985,12 @@ mod tests {
         let to_hex: String = to.iter().map(|b| format!("{b:02x}")).collect();
         let fields = vec![
             TypedField {
-                offset: 136,
+                offset: 168,
                 width: 16,
                 value: "18446744073709551716".to_string(),
             },
             TypedField {
-                offset: 88,
+                offset: 136,
                 width: 32,
                 value: to_hex,
             },
@@ -1023,12 +1032,12 @@ mod tests {
         let to_hex: String = to.iter().map(|b| format!("{b:02x}")).collect();
         let fields = vec![
             TypedField {
-                offset: 128,
+                offset: 168,
                 width: 16,
                 value: "18446744073709551716".to_string(),
             },
             TypedField {
-                offset: 80,
+                offset: 136,
                 width: 32,
                 value: to_hex,
             },
@@ -1037,8 +1046,8 @@ mod tests {
             TEST_CHAIN,
             &contract,
             MINT_SELECTOR,
-            112,
             120,
+            128,
             0,
             &fields,
             &seed,
@@ -1048,7 +1057,7 @@ mod tests {
         .unwrap();
         let mem = &order.call_args[4..];
         assert_eq!(
-            &mem[80..112],
+            &mem[136..168],
             &to,
             "the executable recipient matches the signed recipient"
         );
@@ -1075,7 +1084,7 @@ mod tests {
         let to_hex: String = to.iter().map(|b| format!("{b:02x}")).collect();
         let fields = vec![
             TypedField {
-                offset: 96,
+                offset: 136,
                 width: 16,
                 value: "500".to_string(),
             },
@@ -1089,8 +1098,8 @@ mod tests {
             TEST_CHAIN,
             &contract,
             MINT_SELECTOR,
-            80,
-            88,
+            120,
+            128,
             DEFAULT_REGION_OFFSET,
             &fields,
             &seed,
@@ -1107,11 +1116,11 @@ mod tests {
         let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
         let fields = vec![
             FieldArg {
-                offset: 96,
+                offset: 136,
                 value: FieldValue::Address([0u8; 32]),
             },
             FieldArg {
-                offset: 100,
+                offset: 140,
                 value: FieldValue::Word(1),
             },
         ];
@@ -1119,8 +1128,8 @@ mod tests {
             TEST_CHAIN,
             &contract,
             MINT_SELECTOR,
-            80,
-            88,
+            120,
+            128,
             DEFAULT_REGION_OFFSET,
             &fields,
             &seed,
@@ -1137,15 +1146,15 @@ mod tests {
         let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
         let fields = vec![
             FieldArg {
-                offset: 96,
+                offset: 136,
                 value: FieldValue::Address([0u8; 32]),
             },
             FieldArg {
-                offset: 104,
+                offset: 144,
                 value: FieldValue::Word(1),
             },
             FieldArg {
-                offset: 110,
+                offset: 150,
                 value: FieldValue::Word(1),
             },
         ];
@@ -1153,8 +1162,8 @@ mod tests {
             TEST_CHAIN,
             &contract,
             MINT_SELECTOR,
-            80,
-            88,
+            120,
+            128,
             DEFAULT_REGION_OFFSET,
             &fields,
             &seed,
@@ -1170,15 +1179,15 @@ mod tests {
         let seed = [4u8; crate::SEED_LEN];
         let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
         let fields = vec![FieldArg {
-            offset: 88,
+            offset: 128,
             value: FieldValue::Word(1),
         }];
         let err = build_typed_order_call(
             TEST_CHAIN,
             &contract,
             BUMP_SELECTOR,
-            80,
-            88,
+            120,
+            128,
             DEFAULT_REGION_OFFSET,
             &fields,
             &seed,
@@ -1202,8 +1211,8 @@ mod tests {
             TEST_CHAIN,
             &contract,
             MINT_SELECTOR,
-            112,
             120,
+            128,
             DEFAULT_REGION_OFFSET,
             &fields,
             &seed,
@@ -1227,11 +1236,11 @@ mod tests {
         let to = [0xABu8; 32];
         let fields = vec![
             FieldArg {
-                offset: 128,
+                offset: 168,
                 value: FieldValue::Word(500),
             },
             FieldArg {
-                offset: 80,
+                offset: 136,
                 value: FieldValue::Address(to),
             },
         ];
@@ -1239,8 +1248,8 @@ mod tests {
             TEST_CHAIN,
             &contract,
             MINT_SELECTOR,
-            112,
             120,
+            128,
             DEFAULT_REGION_OFFSET,
             &fields,
             &seed,
@@ -1253,10 +1262,10 @@ mod tests {
         assert_eq!(&order.message[88..96], &500u64.to_be_bytes());
         assert_eq!(&order.message[96..128], &to);
 
-        assert_eq!(word_at(&order.user_memory, 128), 500);
-        assert_eq!(&order.user_memory[80..112], &to);
-        assert_eq!(word_at(&order.user_memory, 112), u64::from(SCHEME_LATTICE));
-        assert_eq!(word_at(&order.user_memory, 120), DEFAULT_REGION_OFFSET);
+        assert_eq!(word_at(&order.user_memory, 168), 500);
+        assert_eq!(&order.user_memory[136..168], &to);
+        assert_eq!(word_at(&order.user_memory, 120), u64::from(SCHEME_LATTICE));
+        assert_eq!(word_at(&order.user_memory, 128), DEFAULT_REGION_OFFSET);
 
         assert!(ml_dsa::verify(
             order.public_key.as_slice().try_into().unwrap(),
@@ -1290,7 +1299,7 @@ mod tests {
             layout.ptr_off,
             layout.region_off,
             &[FieldArg {
-                offset: 104,
+                offset: 136,
                 value: FieldValue::Word(7),
             }],
             &seed,
@@ -1310,11 +1319,11 @@ mod tests {
             selector,
             &[
                 FieldArg {
-                    offset: 88,
+                    offset: 120,
                     value: FieldValue::Address(to),
                 },
                 FieldArg {
-                    offset: 120,
+                    offset: 152,
                     value: FieldValue::Word(200),
                 },
             ],
@@ -1328,8 +1337,8 @@ mod tests {
                 .all(|&b| b == 0),
             "context left for the node"
         );
-        assert_eq!(&mem[88..120], &to);
-        assert_eq!(word_at(mem, 120), 200);
+        assert_eq!(&mem[120..152], &to);
+        assert_eq!(word_at(mem, 152), 200);
     }
 
     #[test]
@@ -1339,11 +1348,11 @@ mod tests {
             selector,
             &[
                 FieldArg {
-                    offset: 88,
+                    offset: 120,
                     value: FieldValue::name("alice"),
                 },
                 FieldArg {
-                    offset: 128,
+                    offset: 160,
                     value: FieldValue::Word(2),
                 },
             ],
@@ -1356,18 +1365,18 @@ mod tests {
                 .all(|&b| b == 0),
             "context stays for the node"
         );
-        assert_eq!(&mem[88..93], b"alice", "the label bytes lead the window");
+        assert_eq!(&mem[120..125], b"alice", "the label bytes lead the window");
         assert!(
-            mem[93..120].iter().all(|&b| b == 0),
+            mem[125..152].iter().all(|&b| b == 0),
             "the window tail is zero padded"
         );
         assert_eq!(
-            word_at(mem, 120),
+            word_at(mem, 152),
             5,
             "the length word sits directly after the window"
         );
         assert_eq!(
-            word_at(mem, 128),
+            word_at(mem, 160),
             2,
             "the following word argument lands after the name"
         );
@@ -1381,7 +1390,7 @@ mod tests {
         let err = build_call_args(
             selector,
             &[FieldArg {
-                offset: 88,
+                offset: 120,
                 value: FieldValue::name(&long),
             }],
         )
@@ -1394,7 +1403,7 @@ mod tests {
         assert!(build_call_args(
             selector,
             &[FieldArg {
-                offset: 88,
+                offset: 120,
                 value: FieldValue::name(&exact)
             }]
         )
