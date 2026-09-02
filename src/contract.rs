@@ -25,7 +25,10 @@ pub const DEFAULT_REGION_OFFSET: u64 = 8192;
 
 const MAX_USER_MEMORY: usize = 65536;
 
-const DEPLOY_PARAMS_TAG: &[u8; 8] = b"QDEPLOY1";
+/// Must match the chain's deploy frame version. Bumped with the 120 byte call
+/// context so a container built for the old 88 byte layout is rejected rather than
+/// silently reading its arguments from the paying asset field.
+const DEPLOY_PARAMS_TAG: &[u8; 8] = b"QDEPLOY2";
 
 const GENESIS_PARAM_SENTINEL: &[u8; 8] = b"QGENSNTL";
 
