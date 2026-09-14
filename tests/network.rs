@@ -68,9 +68,17 @@ fn spawn_gateway(reported_chain: &'static str) -> (u16, Arc<AtomicUsize>) {
                      \"head_height\":10,\"denomination\":\"Quon\",\
                      \"fee\":{{\"transfer_quon\":\"100\"}},\"version\":\"test\"}}"
                 ),
-                "/v1/get_account" => "{\"address\":\"Q1acct\",\"nonce\":0,\"balance\":\"0\",\
-                     \"scheme\":1,\"has_key\":true}"
-                    .to_string(),
+                "/v1/get_account" => {
+                    let addr = request
+                        .rsplit_once("\"address\":\"")
+                        .and_then(|(_, rest)| rest.split('"').next())
+                        .unwrap_or("Q1acct")
+                        .to_string();
+                    format!(
+                        "{{\"address\":\"{addr}\",\"nonce\":0,\"balance\":\"0\",\
+                         \"scheme\":1,\"has_key\":true}}"
+                    )
+                }
                 "/v1/submit_transaction" => {
                     submits_for_thread.fetch_add(1, Ordering::SeqCst);
                     "{\"verdict\":\"accepted\",\"state\":\"fresh\",\"tx_id\":\"Qtxabc\"}"

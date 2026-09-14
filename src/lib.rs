@@ -20,6 +20,10 @@ pub use qtv_tx::{
 
 pub const SEED_LEN: usize = 32;
 
+/// How far ahead of the caller's expected nonce a gateway-reported nonce may be before
+/// the SDK treats it as a lie and refuses to sign.
+pub const MAX_NONCE_GAP: u64 = 16;
+
 pub const ADDRESS_PAYLOAD_LEN: usize = 32;
 
 pub const NATIVE_TRANSFER_METER: u64 = 1_210;
@@ -591,7 +595,17 @@ mod client {
         }
 
         pub fn account(&self, address: &str) -> Result<Account, String> {
-            parse_account(&self.rpc("get_account", account_body(address))?)
+            let account = parse_account(&self.rpc("get_account", account_body(address))?)?;
+            // The gateway echoes the address it answered for. A lying gateway that
+            // returns another account's nonce is caught here before we ever sign against
+            // it.
+            if account.address != address {
+                return Err(format!(
+                    "the gateway answered for {} when asked about {address}, refusing to trust it",
+                    account.address
+                ));
+            }
+            Ok(account)
         }
 
         pub fn submit(&self, tx_bytes: &[u8]) -> Result<Submit, String> {
@@ -610,6 +624,23 @@ mod client {
             amount: u64,
             max_fee: u128,
         ) -> Result<(SignedTransfer, Submit), String> {
+            self.transfer_expecting(seed, index, to, amount, max_fee, None)
+        }
+
+        /// Transfer, optionally pinning the nonce you expect. A signed transaction has no
+        /// expiry, so a nonce the gateway invents at a future value is a standing
+        /// authorization it can broadcast later for a second, unwanted payment. Passing
+        /// the nonce you expect makes the SDK refuse a regression or a large forward jump
+        /// rather than blindly signing whatever the gateway reports.
+        pub fn transfer_expecting(
+            &self,
+            seed: &[u8; SEED_LEN],
+            index: u64,
+            to: &str,
+            amount: u64,
+            max_fee: u128,
+            expected_nonce: Option<u64>,
+        ) -> Result<(SignedTransfer, Submit), String> {
             if !valid_address(to) {
                 return Err("the recipient is not a Q1 address".to_string());
             }
@@ -622,19 +653,42 @@ mod client {
                 ));
             }
             let sender = account_address(seed, index);
-            let account = self.account(&sender)?;
+            let nonce = self.checked_nonce(&sender, expected_nonce)?;
             let chain_id = self.signing_chain_id(&info)?;
             let signed = sign_transfer(
                 seed,
                 index,
                 to,
                 amount,
-                account.nonce,
+                nonce,
                 info.transfer_fee,
                 chain_id,
             )?;
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome))
+        }
+
+        /// The account nonce to sign with, refusing a gateway that reports a nonce below
+        /// the one the caller expects (a replay that would double-spend) or implausibly
+        /// far ahead of it.
+        fn checked_nonce(&self, sender: &str, expected: Option<u64>) -> Result<u64, String> {
+            let account = self.account(sender)?;
+            if let Some(exp) = expected {
+                if account.nonce < exp {
+                    return Err(format!(
+                        "the gateway reported nonce {} below the expected {exp}; refusing so a \
+                         replayed lower nonce cannot force a second payment",
+                        account.nonce
+                    ));
+                }
+                if account.nonce > exp.saturating_add(MAX_NONCE_GAP) {
+                    return Err(format!(
+                        "the gateway reported nonce {} far above the expected {exp}; refusing",
+                        account.nonce
+                    ));
+                }
+            }
+            Ok(account.nonce)
         }
 
         pub fn call(

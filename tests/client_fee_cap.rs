@@ -68,9 +68,19 @@ fn spawn_gateway(fee_quon: u128) -> (u16, Arc<AtomicUsize>) {
                      \"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"{fee_quon}\"}},\
                      \"version\":\"test\"}}"
                 ),
-                "/v1/get_account" => "{\"address\":\"Q1acct\",\"nonce\":0,\"balance\":\"0\",\
-                     \"scheme\":1,\"has_key\":true}"
-                    .to_string(),
+                "/v1/get_account" => {
+                    // Echo the requested address, as the real gateway does; the client
+                    // now refuses an answer for a different address.
+                    let addr = request
+                        .rsplit_once("\"address\":\"")
+                        .and_then(|(_, rest)| rest.split('"').next())
+                        .unwrap_or("Q1acct")
+                        .to_string();
+                    format!(
+                        "{{\"address\":\"{addr}\",\"nonce\":0,\"balance\":\"0\",\
+                         \"scheme\":1,\"has_key\":true}}"
+                    )
+                }
                 "/v1/submit_transaction" => {
                     submits_for_thread.fetch_add(1, Ordering::SeqCst);
                     "{\"verdict\":\"accepted\",\"state\":\"fresh\",\"tx_id\":\"Qtxabc\"}"
@@ -126,5 +136,26 @@ fn transfer_at_or_below_the_ceiling_signs_and_submits() {
         submits.load(Ordering::SeqCst),
         1,
         "an allowed transfer submits exactly once"
+    );
+}
+
+#[test]
+fn a_nonce_below_the_expected_one_is_refused() {
+    // The gateway reports nonce 0. A caller who has already sent transactions and
+    // expects nonce 5 must not sign against the lower nonce the gateway reports, which
+    // is exactly the replay a lying gateway would use to force a second payment.
+    let (port, submits) = spawn_gateway(1000);
+    let client = Client::new(format!("http://127.0.0.1:{port}"));
+    let seed = [11u8; 32];
+    let to = account_address(&seed, 1);
+
+    let err = client
+        .transfer_expecting(&seed, 0, &to, 1000, 1000, Some(5))
+        .expect_err("a nonce below the expected one must be refused");
+    assert!(err.contains("below the expected"), "unexpected error: {err}");
+    assert_eq!(
+        submits.load(Ordering::SeqCst),
+        0,
+        "a refused transfer never reaches submit"
     );
 }
