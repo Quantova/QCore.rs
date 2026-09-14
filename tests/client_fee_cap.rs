@@ -69,8 +69,6 @@ fn spawn_gateway(fee_quon: u128) -> (u16, Arc<AtomicUsize>) {
                      \"version\":\"test\"}}"
                 ),
                 "/v1/get_account" => {
-                    // Echo the requested address, as the real gateway does; the client
-                    // now refuses an answer for a different address.
                     let addr = request
                         .rsplit_once("\"address\":\"")
                         .and_then(|(_, rest)| rest.split('"').next())
@@ -141,9 +139,6 @@ fn transfer_at_or_below_the_ceiling_signs_and_submits() {
 
 #[test]
 fn a_nonce_below_the_expected_one_is_refused() {
-    // The gateway reports nonce 0. A caller who has already sent transactions and
-    // expects nonce 5 must not sign against the lower nonce the gateway reports, which
-    // is exactly the replay a lying gateway would use to force a second payment.
     let (port, submits) = spawn_gateway(1000);
     let client = Client::new(format!("http://127.0.0.1:{port}"));
     let seed = [11u8; 32];

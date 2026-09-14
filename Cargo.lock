@@ -8,7 +8,7 @@ version = "0.1.0"
 dependencies = [
  "qtv-account",
  "qtv-codec",
- "qtv-crypto",
+ "qtv-crypto 0.3.0 (git+https://github.com/Quantova/Q-Crypto.git?rev=bfee34d4b655d2e94a2615fd5005ed7253fa0028)",
  "qtv-idfmt",
  "qtv-tx",
  "qtv-vm",
@@ -19,7 +19,7 @@ dependencies = [
 name = "qtv-account"
 version = "0.1.0"
 dependencies = [
- "qtv-crypto",
+ "qtv-crypto 0.3.0 (git+https://github.com/Quantova/Q-Crypto.git?rev=bfee34d4b655d2e94a2615fd5005ed7253fa0028)",
  "qtv-idfmt",
  "qtv-wipe",
 ]
@@ -34,6 +34,11 @@ version = "0.3.0"
 source = "git+https://github.com/Quantova/Q-Crypto.git?rev=292594d18080179e304576164f44703d410d919f#292594d18080179e304576164f44703d410d919f"
 
 [[package]]
+name = "qtv-crypto"
+version = "0.3.0"
+source = "git+https://github.com/Quantova/Q-Crypto.git?rev=bfee34d4b655d2e94a2615fd5005ed7253fa0028#bfee34d4b655d2e94a2615fd5005ed7253fa0028"
+
+[[package]]
 name = "qtv-idfmt"
 version = "0.1.0"
 
@@ -43,7 +48,7 @@ version = "0.1.0"
 dependencies = [
  "qtv-account",
  "qtv-codec",
- "qtv-crypto",
+ "qtv-crypto 0.3.0 (git+https://github.com/Quantova/Q-Crypto.git?rev=bfee34d4b655d2e94a2615fd5005ed7253fa0028)",
  "qtv-idfmt",
  "qtv-wipe",
 ]
@@ -52,7 +57,7 @@ dependencies = [
 name = "qtv-vm"
 version = "0.2.0"
 dependencies = [
- "qtv-crypto",
+ "qtv-crypto 0.3.0 (git+https://github.com/Quantova/Q-Crypto.git?rev=292594d18080179e304576164f44703d410d919f)",
 ]
 
 [[package]]
