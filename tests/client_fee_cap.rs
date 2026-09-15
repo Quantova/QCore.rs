@@ -147,7 +147,10 @@ fn a_nonce_below_the_expected_one_is_refused() {
     let err = client
         .transfer_expecting(&seed, 0, &to, 1000, 1000, Some(5))
         .expect_err("a nonce below the expected one must be refused");
-    assert!(err.contains("below the expected"), "unexpected error: {err}");
+    assert!(
+        err.contains("below the expected"),
+        "unexpected error: {err}"
+    );
     assert_eq!(
         submits.load(Ordering::SeqCst),
         0,

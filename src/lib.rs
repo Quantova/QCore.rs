@@ -645,15 +645,8 @@ mod client {
             let sender = account_address(seed, index);
             let nonce = self.checked_nonce(&sender, expected_nonce)?;
             let chain_id = self.signing_chain_id(&info)?;
-            let signed = sign_transfer(
-                seed,
-                index,
-                to,
-                amount,
-                nonce,
-                info.transfer_fee,
-                chain_id,
-            )?;
+            let signed =
+                sign_transfer(seed, index, to, amount, nonce, info.transfer_fee, chain_id)?;
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome))
         }
