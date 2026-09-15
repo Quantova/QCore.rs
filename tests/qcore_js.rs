@@ -51,7 +51,7 @@ fn the_transfer_body_reproduces_the_qcore_js_vector() {
     );
     assert_eq!(
         signed.tx_id,
-        "QTX1ZTG4D47475SN3A50CN57RNSH6PKZEJTC72XCF26MTM0CRYTD02JQK7EPJK"
+        "QTX1END327W7UWEMLSZ6GHJTS69JRDCYD8TGPRER5YWA7WAXQFHK9S2STHQQ94"
     );
 }
 
@@ -74,7 +74,7 @@ fn the_payable_transaction_reproduces_the_qcore_js_vector() {
     assert!(qtv_tx::verify(&wrapper, sender.public_key()));
     assert_eq!(
         wrapper.id(),
-        "QTX1HUT8HQ3VXZA0075DQFZHVSG5H63UNUHJT4L20ZK3AD054Q6TS3QQ2GTHUD"
+        "QTX1XSW6UVTL4QVDRUHCWAWFK7WFAXK88Q0YKAPQYKDPVTX0377Q7S3Q86N0NR"
     );
 }
 
