@@ -34,7 +34,7 @@ qtv-account = { path = "../Quantova-Chain/crates/qtv-account" }
 qtv-tx = { path = "../Quantova-Chain/crates/qtv-tx" }
 qtv-codec = { path = "../Quantova-Chain/crates/qtv-codec" }
 qtv-idfmt = { path = "../Quantova-Chain/crates/qtv-idfmt" }
-qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "bfee34d4b655d2e94a2615fd5005ed7253fa0028" }
+qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "5defe0cb3e4458795e0e1bae7275a4ffbf4edb9c" }
 qtv-wipe = { path = "../Quantova-Chain/crates/qtv-wipe" }
 # The machine's own ABI: the verify region byte lengths, the scheme identifiers, and the
 # scalar slot key encoding, read as constants so the client never restates a size the machine
