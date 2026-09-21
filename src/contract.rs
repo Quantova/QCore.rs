@@ -339,8 +339,18 @@ pub fn build_typed_order_call(
         region_off
     };
     let contract_id = contract_id(contract)?;
-    if scheme_off < CONTRACT_CONTEXT_BYTES || ptr_off < CONTRACT_CONTEXT_BYTES {
-        return Err("the scheme or pointer offset falls inside the host call context".to_string());
+    // Every offset, the verify region included. The host stamps caller, contract, time,
+    // chain, value and asset over the first CONTRACT_CONTEXT_BYTES, so a region starting
+    // inside it can never verify, and building the call anyway burns the fee and the
+    // nonce for a transaction that cannot succeed.
+    if scheme_off < CONTRACT_CONTEXT_BYTES
+        || ptr_off < CONTRACT_CONTEXT_BYTES
+        || region_off < CONTRACT_CONTEXT_BYTES
+    {
+        return Err(
+            "the scheme, pointer or verify region offset falls inside the host call context"
+                .to_string(),
+        );
     }
     for field in fields {
         field.value.ensure_fits()?;
