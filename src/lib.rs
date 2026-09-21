@@ -466,12 +466,10 @@ pub fn parse_transaction(response: &str) -> Result<TxStatus, String> {
 pub fn generate_seed() -> Result<Zeroizing<[u8; SEED_LEN]>, String> {
     #[cfg(unix)]
     {
-        use std::io::Read;
-        let mut file = std::fs::File::open("/dev/urandom")
-            .map_err(|e| format!("open the random source: {e}"))?;
+        // The kernel entropy call, which blocks until the pool is seeded. A wallet seed
+        // drawn from an unseeded pool is predictable and is then kept for good.
         let mut seed = Zeroizing::new([0u8; SEED_LEN]);
-        file.read_exact(&mut *seed)
-            .map_err(|e| format!("read the random source: {e}"))?;
+        qtv_crypto::rng::fill_random(&mut *seed);
         Ok(seed)
     }
     #[cfg(not(unix))]
