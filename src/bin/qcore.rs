@@ -231,6 +231,7 @@ fn read_seed(source: &str) -> Result<Zeroizing<[u8; 32]>, String> {
     let hex: Zeroizing<String> = Zeroizing::new(if let Some(var) = source.strip_prefix("env:") {
         std::env::var(var).map_err(|_| format!("the environment variable {var} is not set"))?
     } else if let Some(path) = source.strip_prefix('@') {
+        refuse_shared_seed_file(path)?;
         std::fs::read_to_string(path).map_err(|e| format!("reading the seed file {path}: {e}"))?
     } else if source == "-" {
         let mut line = String::new();
@@ -246,6 +247,22 @@ fn read_seed(source: &str) -> Result<Zeroizing<[u8; 32]>, String> {
         source.to_string()
     });
     parse_seed(hex.trim())
+}
+
+fn refuse_shared_seed_file(path: &str) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            if meta.permissions().mode() & 0o077 != 0 {
+                return Err(format!(
+                    "the seed file {path} is readable by group or others, restrict it with chmod 600 before use"
+                ));
+            }
+        }
+    }
+    let _ = path;
+    Ok(())
 }
 
 fn parse_seed(hex: &str) -> Result<Zeroizing<[u8; 32]>, String> {
@@ -273,6 +290,21 @@ fn parse_index(arg: Option<&String>) -> Result<u64, String> {
 #[cfg(test)]
 mod seed_tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_group_readable_seed_file_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("qcore_seed_{}", std::process::id()));
+        std::fs::write(&path, "ab".repeat(32)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let shared = read_seed(&format!("@{}", path.display()));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let private = read_seed(&format!("@{}", path.display()));
+        let _ = std::fs::remove_file(&path);
+        assert!(shared.is_err());
+        assert!(private.is_ok());
+    }
 
     #[test]
     fn a_seed_with_a_sign_character_is_refused() {
