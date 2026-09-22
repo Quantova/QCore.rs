@@ -173,11 +173,11 @@ fn print_usage() {
     println!(
         "  qcore info <gateway-url>                              the chain id, height, and fee"
     );
-    println!("  qcore register [--mainnet] <gateway-url> <seed-hex> <max-fee>     register a funded account's key so it can send");
+    println!("  qcore register [--testnet|--mainnet] <gateway-url> <seed-hex> <max-fee>     register a funded account's key so it can send");
     println!(
         "  qcore balance <gateway-url> <address>                 an account balance and nonce"
     );
-    println!("  qcore send [--mainnet] <gateway-url> <seed-hex> <to> <amount> <max-fee>   sign and submit a transfer");
+    println!("  qcore send [--testnet|--mainnet] <gateway-url> <seed-hex> <to> <amount> <max-fee>   sign and submit a transfer");
     println!("  qcore status <gateway-url> <tx-id>                    where a transaction is");
     println!();
     println!("A <seed> can be the hex directly, @file to read it from a file, - to read it from");
@@ -185,15 +185,15 @@ fn print_usage() {
     println!("the seed never appears in the process list or your shell history.");
     println!();
     println!(
-        "Pass --mainnet on a signing command to bind the client to the Q-main-net-1 network and"
+        "Pass --testnet or --mainnet on a signing command to bind the client to that network;"
     );
     println!(
-        "acknowledge that the transaction moves real value; the command then refuses to sign if"
+        "--mainnet also acknowledges that the transaction moves real value. The command refuses"
     );
     println!(
-        "the gateway does not serve that network. Without it a signing command follows whatever"
+        "to sign if the gateway does not serve the chosen network, and refuses to sign for either"
     );
-    println!("network the gateway names and does not prompt.");
+    println!("public network when neither flag is given.");
 }
 
 fn take_flag(args: &[String], flag: &str) -> (bool, Vec<String>) {
