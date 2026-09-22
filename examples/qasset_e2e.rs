@@ -296,6 +296,7 @@ fn run() -> Result<(), String> {
         METER,
         fee,
         qcore::chain_id_from_name(&info.chain_id),
+        0,
     )?;
     accepted(&client.submit(&replay.tx_bytes)?, "replay")?;
     let replay_height = poll_finality(&client, &replay.tx_id)?;

@@ -83,6 +83,7 @@ fn the_frozen_vectors_reproduce_from_the_signing_core() {
             meter_limit,
             fee,
             chain_id,
+            0,
         )
         .unwrap();
         assert_eq!(signed.from, text(v, "from"), "{name} from");
@@ -104,6 +105,7 @@ fn the_frozen_vectors_reproduce_from_the_signing_core() {
             meter_limit,
             fee,
             chain_id,
+            0,
         )
         .unwrap();
         assert_eq!(

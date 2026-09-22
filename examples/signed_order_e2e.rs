@@ -189,6 +189,7 @@ fn run() -> Result<(), String> {
         METER,
         fee,
         qcore::chain_id_from_name(&info.chain_id),
+        0,
     )?;
     let replay_out = client.submit(&replay.tx_bytes)?;
     accepted(&replay_out, "replay")?;

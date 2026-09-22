@@ -157,3 +157,61 @@ fn a_nonce_below_the_expected_one_is_refused() {
         "a refused transfer never reaches submit"
     );
 }
+
+#[test]
+fn every_client_signing_path_expires_a_window_past_the_head() {
+    let (port, _) = spawn_gateway(500);
+    let client = Client::new(format!("http://127.0.0.1:{port}"));
+    let seed = [11u8; 32];
+    let to = account_address(&seed, 1);
+    let chain_id = qcore::chain_id_from_name("Q-test-net-1");
+    let until = 10 + qcore::DEFAULT_VALIDITY_BLOCKS;
+
+    let (signed, _) = client.transfer(&seed, 0, &to, 1000, 1000).unwrap();
+    let expected = qcore::sign_transfer(&seed, 0, &to, 1000, 0, 500, chain_id, until).unwrap();
+    assert_eq!(signed.tx_bytes, expected.tx_bytes);
+
+    let (signed, _) = client
+        .call(&seed, 0, &to, vec![1, 2], 21_000, 1000)
+        .unwrap();
+    let expected =
+        qcore::sign_call(&seed, 0, &to, vec![1, 2], 0, 21_000, 500, chain_id, until).unwrap();
+    assert_eq!(signed.tx_bytes, expected.tx_bytes);
+
+    let (signed, _) = client.register(&seed, 0, 1000).unwrap();
+    let expected = qcore::sign_register(&seed, 0, 0, 500, chain_id, until).unwrap();
+    assert_eq!(signed.tx_bytes, expected.tx_bytes);
+
+    let unbounded = qcore::sign_register(&seed, 0, 0, 500, chain_id, 0).unwrap();
+    assert_ne!(
+        signed.tx_bytes, unbounded.tx_bytes,
+        "the window is signed, not implied"
+    );
+}
+
+#[test]
+fn every_client_signing_path_takes_an_expected_nonce() {
+    let (port, submits) = spawn_gateway(500);
+    let client = Client::new(format!("http://127.0.0.1:{port}"));
+    let seed = [11u8; 32];
+    let to = account_address(&seed, 1);
+    let refused = [
+        client
+            .call_payable_expecting(&seed, 0, &to, vec![1], 0, 21_000, 1000, Some(9))
+            .map(|_| ()),
+        client
+            .register_expecting(&seed, 0, 1000, Some(9))
+            .map(|_| ()),
+    ];
+    for outcome in refused {
+        let err = outcome.expect_err("a gateway nonce below the expected one is refused");
+        assert!(
+            err.contains("below the expected"),
+            "unexpected error: {err}"
+        );
+    }
+    assert_eq!(submits.load(Ordering::SeqCst), 0);
+    assert!(client
+        .call_payable_expecting(&seed, 0, &to, vec![1], 0, 21_000, 1000, Some(0))
+        .is_ok());
+}

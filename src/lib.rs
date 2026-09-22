@@ -127,6 +127,7 @@ pub fn sign_payable_call(
     meter_limit: u64,
     fee: u128,
     chain_id: u64,
+    valid_until: u64,
 ) -> Result<SignedTransfer, String> {
     if !valid_address(target) {
         return Err("the target is not a Q1 address".to_string());
@@ -141,7 +142,8 @@ pub fn sign_payable_call(
         call,
         value,
         chain_id,
-    );
+    )
+    .valid_until(valid_until);
     let wrapper = sign(&sender, &body);
     Ok(SignedTransfer {
         from: sender.address(),
@@ -160,6 +162,7 @@ pub fn sign_call(
     meter_limit: u64,
     fee: u128,
     chain_id: u64,
+    valid_until: u64,
 ) -> Result<SignedTransfer, String> {
     sign_payable_call(
         seed,
@@ -171,6 +174,7 @@ pub fn sign_call(
         meter_limit,
         fee,
         chain_id,
+        valid_until,
     )
 }
 
@@ -186,6 +190,7 @@ pub fn sign_asset_call(
     meter_limit: u64,
     fee: u128,
     chain_id: u64,
+    valid_until: u64,
 ) -> Result<SignedTransfer, String> {
     if !valid_address(target) {
         return Err("the target is not a Q1 address".to_string());
@@ -208,7 +213,8 @@ pub fn sign_asset_call(
         amount,
         chain_id,
     )
-    .carrying(issuer32);
+    .carrying(issuer32)
+    .valid_until(valid_until);
     let wrapper = sign(&sender, &body);
     Ok(SignedTransfer {
         from: sender.address(),
@@ -217,6 +223,7 @@ pub fn sign_asset_call(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn sign_transfer(
     seed: &[u8; SEED_LEN],
     index: u64,
@@ -225,6 +232,7 @@ pub fn sign_transfer(
     nonce: u64,
     fee: u128,
     chain_id: u64,
+    valid_until: u64,
 ) -> Result<SignedTransfer, String> {
     let mut encoder = Encoder::new();
     encoder.put_u64(amount);
@@ -237,6 +245,7 @@ pub fn sign_transfer(
         NATIVE_TRANSFER_METER,
         fee,
         chain_id,
+        valid_until,
     )
 }
 
@@ -246,6 +255,7 @@ pub fn sign_register(
     nonce: u64,
     fee: u128,
     chain_id: u64,
+    valid_until: u64,
 ) -> Result<SignedTransfer, String> {
     let public_key = account_public_key(seed, index);
     sign_call(
@@ -257,7 +267,14 @@ pub fn sign_register(
         NATIVE_TRANSFER_METER,
         fee,
         chain_id,
+        valid_until,
     )
+}
+
+pub const DEFAULT_VALIDITY_BLOCKS: u64 = 300;
+
+pub fn valid_until_from(info: &NodeInfo) -> u64 {
+    info.head_height.saturating_add(DEFAULT_VALIDITY_BLOCKS)
 }
 
 pub fn submit_body(tx_bytes: &[u8]) -> String {
@@ -643,8 +660,16 @@ mod client {
             let sender = account_address(seed, index);
             let nonce = self.checked_nonce(&sender, expected_nonce)?;
             let chain_id = self.signing_chain_id(&info)?;
-            let signed =
-                sign_transfer(seed, index, to, amount, nonce, info.transfer_fee, chain_id)?;
+            let signed = sign_transfer(
+                seed,
+                index,
+                to,
+                amount,
+                nonce,
+                info.transfer_fee,
+                chain_id,
+                valid_until_from(&info),
+            )?;
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome))
         }
@@ -678,7 +703,7 @@ mod client {
             meter_limit: u64,
             max_fee: u128,
         ) -> Result<(SignedTransfer, Submit), String> {
-            self.call_payable(seed, index, target, args, 0, meter_limit, max_fee)
+            self.call_payable_expecting(seed, index, target, args, 0, meter_limit, max_fee, None)
         }
 
         #[allow(clippy::too_many_arguments)]
@@ -692,6 +717,30 @@ mod client {
             meter_limit: u64,
             max_fee: u128,
         ) -> Result<(SignedTransfer, Submit), String> {
+            self.call_payable_expecting(
+                seed,
+                index,
+                target,
+                args,
+                value,
+                meter_limit,
+                max_fee,
+                None,
+            )
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        pub fn call_payable_expecting(
+            &self,
+            seed: &[u8; SEED_LEN],
+            index: u64,
+            target: &str,
+            args: Vec<u8>,
+            value: u64,
+            meter_limit: u64,
+            max_fee: u128,
+            expected_nonce: Option<u64>,
+        ) -> Result<(SignedTransfer, Submit), String> {
             if !valid_address(target) {
                 return Err("the target is not a Q1 address".to_string());
             }
@@ -704,7 +753,7 @@ mod client {
                 ));
             }
             let sender = account_address(seed, index);
-            let account = self.account(&sender)?;
+            let nonce = self.checked_nonce(&sender, expected_nonce)?;
             let chain_id = self.signing_chain_id(&info)?;
             let signed = sign_payable_call(
                 seed,
@@ -712,10 +761,11 @@ mod client {
                 target,
                 args,
                 value,
-                account.nonce,
+                nonce,
                 meter_limit,
                 info.transfer_fee,
                 chain_id,
+                valid_until_from(&info),
             )?;
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome))
@@ -733,6 +783,32 @@ mod client {
             meter_limit: u64,
             max_fee: u128,
         ) -> Result<(SignedTransfer, Submit), String> {
+            self.call_asset_expecting(
+                seed,
+                index,
+                target,
+                args,
+                asset_issuer,
+                amount,
+                meter_limit,
+                max_fee,
+                None,
+            )
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        pub fn call_asset_expecting(
+            &self,
+            seed: &[u8; SEED_LEN],
+            index: u64,
+            target: &str,
+            args: Vec<u8>,
+            asset_issuer: &str,
+            amount: u64,
+            meter_limit: u64,
+            max_fee: u128,
+            expected_nonce: Option<u64>,
+        ) -> Result<(SignedTransfer, Submit), String> {
             let info = self.node_info()?;
             self.guard_mainnet()?;
             if info.transfer_fee > max_fee {
@@ -742,7 +818,7 @@ mod client {
                 ));
             }
             let sender = account_address(seed, index);
-            let account = self.account(&sender)?;
+            let nonce = self.checked_nonce(&sender, expected_nonce)?;
             let chain_id = self.signing_chain_id(&info)?;
             let signed = sign_asset_call(
                 seed,
@@ -751,10 +827,11 @@ mod client {
                 args,
                 asset_issuer,
                 amount,
-                account.nonce,
+                nonce,
                 meter_limit,
                 info.transfer_fee,
                 chain_id,
+                valid_until_from(&info),
             )?;
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome))
@@ -809,6 +886,36 @@ mod client {
             meter_limit: u64,
             max_fee: u128,
         ) -> Result<(SignedTransfer, Submit, contract::SignedOrderCall), String> {
+            self.call_signed_order_expecting(
+                caller_seed,
+                caller_index,
+                contract,
+                selector,
+                layout,
+                fields,
+                owner_seed,
+                owner_index,
+                meter_limit,
+                max_fee,
+                None,
+            )
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        pub fn call_signed_order_expecting(
+            &self,
+            caller_seed: &[u8; SEED_LEN],
+            caller_index: u64,
+            contract: &str,
+            selector: [u8; 4],
+            layout: &contract::OrderLayout,
+            fields: &[u64],
+            owner_seed: &[u8; SEED_LEN],
+            owner_index: u64,
+            meter_limit: u64,
+            max_fee: u128,
+            expected_nonce: Option<u64>,
+        ) -> Result<(SignedTransfer, Submit, contract::SignedOrderCall), String> {
             if !valid_address(contract) {
                 return Err("the contract is not a Q1 address".to_string());
             }
@@ -834,16 +941,17 @@ mod client {
                 nonce,
             )?;
             let caller = account_address(caller_seed, caller_index);
-            let account = self.account(&caller)?;
+            let account_nonce = self.checked_nonce(&caller, expected_nonce)?;
             let signed = sign_call(
                 caller_seed,
                 caller_index,
                 contract,
                 order.call_args.clone(),
-                account.nonce,
+                account_nonce,
                 meter_limit,
                 info.transfer_fee,
                 chain_id,
+                valid_until_from(&info),
             )?;
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome, order))
@@ -866,6 +974,44 @@ mod client {
             in_asset: Option<&str>,
             meter_limit: u64,
             max_fee: u128,
+        ) -> Result<(SignedTransfer, Submit, contract::SignedOrderCall), String> {
+            self.call_typed_order_expecting(
+                caller_seed,
+                caller_index,
+                contract,
+                selector,
+                scheme_off,
+                ptr_off,
+                region_off,
+                fields,
+                owner_seed,
+                owner_index,
+                value,
+                in_asset,
+                meter_limit,
+                max_fee,
+                None,
+            )
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        pub fn call_typed_order_expecting(
+            &self,
+            caller_seed: &[u8; SEED_LEN],
+            caller_index: u64,
+            contract: &str,
+            selector: [u8; 4],
+            scheme_off: u64,
+            ptr_off: u64,
+            region_off: u64,
+            fields: &[contract::FieldArg],
+            owner_seed: &[u8; SEED_LEN],
+            owner_index: u64,
+            value: u64,
+            in_asset: Option<&str>,
+            meter_limit: u64,
+            max_fee: u128,
+            expected_nonce: Option<u64>,
         ) -> Result<(SignedTransfer, Submit, contract::SignedOrderCall), String> {
             if !valid_address(contract) {
                 return Err("the contract is not a Q1 address".to_string());
@@ -894,7 +1040,7 @@ mod client {
                 nonce,
             )?;
             let caller = account_address(caller_seed, caller_index);
-            let account = self.account(&caller)?;
+            let account_nonce = self.checked_nonce(&caller, expected_nonce)?;
             let args = order.call_args.clone();
             let signed = match in_asset {
                 Some(issuer) => sign_asset_call(
@@ -904,10 +1050,11 @@ mod client {
                     args,
                     issuer,
                     value,
-                    account.nonce,
+                    account_nonce,
                     meter_limit,
                     info.transfer_fee,
                     chain_id,
+                    valid_until_from(&info),
                 )?,
                 None => sign_payable_call(
                     caller_seed,
@@ -915,10 +1062,11 @@ mod client {
                     contract,
                     args,
                     value,
-                    account.nonce,
+                    account_nonce,
                     meter_limit,
                     info.transfer_fee,
                     chain_id,
+                    valid_until_from(&info),
                 )?,
             };
             let outcome = self.submit(&signed.tx_bytes)?;
@@ -934,6 +1082,28 @@ mod client {
             meter_limit: u64,
             max_fee: u128,
         ) -> Result<(SignedTransfer, Submit, String), String> {
+            self.deploy_with_params_expecting(
+                seed,
+                index,
+                container,
+                params,
+                meter_limit,
+                max_fee,
+                None,
+            )
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        pub fn deploy_with_params_expecting(
+            &self,
+            seed: &[u8; SEED_LEN],
+            index: u64,
+            container: &[u8],
+            params: &[contract::DeployParam],
+            meter_limit: u64,
+            max_fee: u128,
+            expected_nonce: Option<u64>,
+        ) -> Result<(SignedTransfer, Submit, String), String> {
             let info = self.node_info()?;
             self.guard_mainnet()?;
             if info.transfer_fee > max_fee {
@@ -943,9 +1113,9 @@ mod client {
                 ));
             }
             let deployer = account_address(seed, index);
-            let account = self.account(&deployer)?;
+            let account_nonce = self.checked_nonce(&deployer, expected_nonce)?;
             let args = contract::build_deploy_call(container, params);
-            let contract = contract_address(&deployer, account.nonce)
+            let contract = contract_address(&deployer, account_nonce)
                 .ok_or("the deployer is not a Q1 address")?;
             let chain_id = self.signing_chain_id(&info)?;
             let signed = sign_call(
@@ -953,10 +1123,11 @@ mod client {
                 index,
                 &vm_deploy_address(),
                 args,
-                account.nonce,
+                account_nonce,
                 meter_limit,
                 info.transfer_fee,
                 chain_id,
+                valid_until_from(&info),
             )?;
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome, contract))
@@ -981,6 +1152,16 @@ mod client {
             index: u64,
             max_fee: u128,
         ) -> Result<(SignedTransfer, Submit), String> {
+            self.register_expecting(seed, index, max_fee, None)
+        }
+
+        pub fn register_expecting(
+            &self,
+            seed: &[u8; SEED_LEN],
+            index: u64,
+            max_fee: u128,
+            expected_nonce: Option<u64>,
+        ) -> Result<(SignedTransfer, Submit), String> {
             let info = self.node_info()?;
             self.guard_mainnet()?;
             if info.transfer_fee > max_fee {
@@ -990,9 +1171,16 @@ mod client {
                 ));
             }
             let sender = account_address(seed, index);
-            let account = self.account(&sender)?;
+            let nonce = self.checked_nonce(&sender, expected_nonce)?;
             let chain_id = self.signing_chain_id(&info)?;
-            let signed = sign_register(seed, index, account.nonce, info.transfer_fee, chain_id)?;
+            let signed = sign_register(
+                seed,
+                index,
+                nonce,
+                info.transfer_fee,
+                chain_id,
+                valid_until_from(&info),
+            )?;
             let outcome = self.submit(&signed.tx_bytes)?;
             Ok((signed, outcome))
         }
@@ -1007,7 +1195,7 @@ mod tests {
     fn a_transfer_is_a_call_that_encodes_the_amount() {
         let seed = [7u8; SEED_LEN];
         let to = account_address(&seed, 0);
-        let transfer = sign_transfer(&seed, 0, &to, 1000, 3, 500, LOCAL_CHAIN_ID).unwrap();
+        let transfer = sign_transfer(&seed, 0, &to, 1000, 3, 500, LOCAL_CHAIN_ID, 0).unwrap();
         let mut encoder = Encoder::new();
         encoder.put_u64(1000);
         let call = sign_call(
@@ -1019,6 +1207,7 @@ mod tests {
             NATIVE_TRANSFER_METER,
             500,
             LOCAL_CHAIN_ID,
+            0,
         )
         .unwrap();
         assert_eq!(transfer.tx_bytes, call.tx_bytes);
@@ -1045,6 +1234,7 @@ mod tests {
             1210,
             500,
             LOCAL_CHAIN_ID,
+            0,
         )
         .unwrap();
         let payable_zero = sign_payable_call(
@@ -1057,6 +1247,7 @@ mod tests {
             1210,
             500,
             LOCAL_CHAIN_ID,
+            0,
         )
         .unwrap();
         assert_eq!(free.tx_bytes, payable_zero.tx_bytes);
@@ -1071,6 +1262,7 @@ mod tests {
             1210,
             500,
             LOCAL_CHAIN_ID,
+            0,
         )
         .unwrap();
         assert_ne!(funded.tx_bytes, free.tx_bytes);
@@ -1096,6 +1288,7 @@ mod tests {
             1210,
             750,
             LOCAL_CHAIN_ID,
+            0,
         )
         .unwrap();
         assert_eq!(signed.tx_bytes, to_bytes(&wrapper));
@@ -1108,16 +1301,16 @@ mod tests {
         let sender = derive(&seed, 0);
         let target = account_address(&seed, 1);
 
-        let testnet = sign_transfer(&seed, 0, &target, 1000, 5, 500, TESTNET_CHAIN_ID).unwrap();
-        let mainnet = sign_transfer(&seed, 0, &target, 1000, 5, 500, MAINNET_CHAIN_ID).unwrap();
+        let testnet = sign_transfer(&seed, 0, &target, 1000, 5, 500, TESTNET_CHAIN_ID, 0).unwrap();
+        let mainnet = sign_transfer(&seed, 0, &target, 1000, 5, 500, MAINNET_CHAIN_ID, 0).unwrap();
         assert_ne!(
             testnet.tx_bytes, mainnet.tx_bytes,
             "the chain id moves the signed bytes"
         );
         assert_ne!(testnet.tx_id, mainnet.tx_id);
 
-        let cheap = sign_transfer(&seed, 0, &target, 1000, 5, 500, TESTNET_CHAIN_ID).unwrap();
-        let dear = sign_transfer(&seed, 0, &target, 1000, 5, 999, TESTNET_CHAIN_ID).unwrap();
+        let cheap = sign_transfer(&seed, 0, &target, 1000, 5, 500, TESTNET_CHAIN_ID, 0).unwrap();
+        let dear = sign_transfer(&seed, 0, &target, 1000, 5, 999, TESTNET_CHAIN_ID, 0).unwrap();
         assert_ne!(
             cheap.tx_bytes, dear.tx_bytes,
             "the fee moves the signed bytes"
@@ -1181,9 +1374,30 @@ mod tests {
         let target = account_address(&seed, 1);
         let lowered = target.to_ascii_lowercase();
         assert_ne!(target, lowered);
-        let upper = sign_call(&seed, 0, &target, vec![4, 2], 9, 1210, 500, LOCAL_CHAIN_ID).unwrap();
-        let lower =
-            sign_call(&seed, 0, &lowered, vec![4, 2], 9, 1210, 500, LOCAL_CHAIN_ID).unwrap();
+        let upper = sign_call(
+            &seed,
+            0,
+            &target,
+            vec![4, 2],
+            9,
+            1210,
+            500,
+            LOCAL_CHAIN_ID,
+            0,
+        )
+        .unwrap();
+        let lower = sign_call(
+            &seed,
+            0,
+            &lowered,
+            vec![4, 2],
+            9,
+            1210,
+            500,
+            LOCAL_CHAIN_ID,
+            0,
+        )
+        .unwrap();
         assert_eq!(upper.tx_bytes, lower.tx_bytes);
         assert_eq!(upper.tx_id, lower.tx_id);
     }
@@ -1232,7 +1446,8 @@ mod tests {
                 1000,
                 0,
                 500,
-                LOCAL_CHAIN_ID
+                LOCAL_CHAIN_ID,
+                0
             )
             .is_err(),
             "a transfer to a non address target is refused before signing"
@@ -1245,7 +1460,8 @@ mod tests {
             0,
             1210,
             500,
-            LOCAL_CHAIN_ID
+            LOCAL_CHAIN_ID,
+            0
         )
         .is_err());
     }
@@ -1253,11 +1469,23 @@ mod tests {
     #[test]
     fn a_bad_target_is_an_error_not_a_panic() {
         let seed = [7u8; SEED_LEN];
-        assert!(sign_transfer(&seed, 0, "not an address", 1000, 0, 500, LOCAL_CHAIN_ID).is_err());
-        assert!(sign_call(&seed, 0, "", vec![1, 2], 0, 1210, 500, LOCAL_CHAIN_ID).is_err());
         assert!(
-            sign_payable_call(&seed, 0, "Q1zzz", vec![1], 5, 0, 1210, 500, LOCAL_CHAIN_ID).is_err()
+            sign_transfer(&seed, 0, "not an address", 1000, 0, 500, LOCAL_CHAIN_ID, 0).is_err()
         );
+        assert!(sign_call(&seed, 0, "", vec![1, 2], 0, 1210, 500, LOCAL_CHAIN_ID, 0).is_err());
+        assert!(sign_payable_call(
+            &seed,
+            0,
+            "Q1zzz",
+            vec![1],
+            5,
+            0,
+            1210,
+            500,
+            LOCAL_CHAIN_ID,
+            0
+        )
+        .is_err());
     }
 
     #[test]
