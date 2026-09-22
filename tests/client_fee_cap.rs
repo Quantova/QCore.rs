@@ -175,7 +175,7 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
         0,
         &to,
         vec![1, 2],
-        1,
+        0,
         21_000,
         call_fee,
         chain_id,
@@ -185,10 +185,10 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
     assert_eq!(signed.tx_bytes, expected.tx_bytes);
 
     let (signed, _) = client.register(&seed, 0, 1000).unwrap();
-    let expected = qcore::sign_register(&seed, 0, 2, 500, chain_id, until).unwrap();
+    let expected = qcore::sign_register(&seed, 0, 0, 500, chain_id, until).unwrap();
     assert_eq!(signed.tx_bytes, expected.tx_bytes);
 
-    let unbounded = qcore::sign_register(&seed, 0, 2, 500, chain_id, 0).unwrap();
+    let unbounded = qcore::sign_register(&seed, 0, 0, 500, chain_id, 0).unwrap();
     assert_ne!(
         signed.tx_bytes, unbounded.tx_bytes,
         "the window is signed, not implied"

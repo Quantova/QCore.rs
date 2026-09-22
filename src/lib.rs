@@ -727,13 +727,13 @@ mod client {
             expected: Option<u64>,
         ) -> Result<u64, String> {
             let local = self.next_nonces.borrow().get(key).copied();
-            match expected.or(local) {
-                Some(exp) if reported > exp => Err(format!(
+            match (expected, local) {
+                (Some(exp), _) | (None, Some(exp)) if reported > exp => Err(format!(
                     "the gateway reported nonce {reported} above the expected {exp}; refusing so a \
                      signature cannot be banked for a nonce the account has not reached"
                 )),
-                Some(exp) => Ok(exp),
-                None => Ok(reported),
+                (Some(exp), _) => Ok(exp),
+                (None, _) => Ok(reported),
             }
         }
 
@@ -1325,7 +1325,16 @@ mod client {
                     tx_id: String::new(),
                 },
             );
-            assert_eq!(client.expected_slot("a", 4, None).unwrap(), 5);
+            assert_eq!(
+                client.expected_slot("a", 5, None).unwrap(),
+                5,
+                "the included nonce advances as the chain reports it"
+            );
+            assert_eq!(
+                client.expected_slot("a", 4, None).unwrap(),
+                4,
+                "a submission that never lands leaves the chain at 4, and 4 is what it will admit"
+            );
             assert!(client.expected_slot("a", 7, None).is_err());
             assert!(client.expected_slot("b", 9, Some(3)).is_err());
             assert_eq!(client.expected_slot("b", 2, Some(3)).unwrap(), 3);
