@@ -499,8 +499,6 @@ pub fn parse_transaction(response: &str) -> Result<TxStatus, String> {
 pub fn generate_seed() -> Result<Zeroizing<[u8; SEED_LEN]>, String> {
     #[cfg(unix)]
     {
-        // The kernel entropy call, which blocks until the pool is seeded. A wallet seed
-        // drawn from an unseeded pool is predictable and is then kept for good.
         let mut seed = Zeroizing::new([0u8; SEED_LEN]);
         qtv_crypto::rng::fill_random(&mut *seed);
         Ok(seed)

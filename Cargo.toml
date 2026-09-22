@@ -12,33 +12,21 @@ keywords = ["post-quantum", "blockchain", "cryptography", "wallet", "quantova"]
 categories = ["cryptography", "cryptography::cryptocurrencies"]
 
 [features]
-# The native client and its HTTP transport. On by default for Rust and native callers
-# and for the proof. A WebAssembly build turns it off so the pure core, which does no
-# input or output, compiles for the browser where the host does the fetch.
 default = ["client"]
 client = []
 
-# The terminal client. It builds only with the client feature, since it reads and writes over the
-# HTTP transport, so a WebAssembly build never pulls it in.
 [[bin]]
 name = "qcore"
 path = "src/bin/qcore.rs"
 required-features = ["client"]
 
 [dependencies]
-# The one implementation of keys, transactions, signing, encoding, and the identifier
-# format. The core reuses these rather than reimplementing any of them, since a second
-# implementation of the post quantum signing is a second chance to be wrong with a
-# user's money.
 qtv-account = { path = "../Quantova-Chain/crates/qtv-account" }
 qtv-tx = { path = "../Quantova-Chain/crates/qtv-tx" }
 qtv-codec = { path = "../Quantova-Chain/crates/qtv-codec" }
 qtv-idfmt = { path = "../Quantova-Chain/crates/qtv-idfmt" }
-qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "cf5ec8f2e884a7dda052fe04f38ef6a0c1dbd055" }
+qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "37a7a4963888a4bb0854d346583e26928659aa63" }
 qtv-wipe = { path = "../Quantova-Chain/crates/qtv-wipe" }
-# The machine's own ABI: the verify region byte lengths, the scheme identifiers, and the
-# scalar slot key encoding, read as constants so the client never restates a size the machine
-# would then reject. Only the `abi` module is used, which is pure and compiles to WebAssembly.
 qtv-vm = { path = "../QVM/crates/qtv-vm" }
 
 [profile.release]

@@ -25,9 +25,6 @@ pub const DEFAULT_REGION_OFFSET: u64 = 8192;
 
 const MAX_USER_MEMORY: usize = 65536;
 
-/// Must match the chain's deploy frame version. Bumped with the 120 byte call
-/// context so a container built for the old 88 byte layout is rejected rather than
-/// silently reading its arguments from the paying asset field.
 const DEPLOY_PARAMS_TAG: &[u8; 8] = b"QDEPLOY2";
 
 const GENESIS_PARAM_SENTINEL: &[u8; 8] = b"QGENSNTL";
@@ -339,10 +336,6 @@ pub fn build_typed_order_call(
         region_off
     };
     let contract_id = contract_id(contract)?;
-    // Every offset, the verify region included. The host stamps caller, contract, time,
-    // chain, value and asset over the first CONTRACT_CONTEXT_BYTES, so a region starting
-    // inside it can never verify, and building the call anyway burns the fee and the
-    // nonce for a transaction that cannot succeed.
     if scheme_off < CONTRACT_CONTEXT_BYTES
         || ptr_off < CONTRACT_CONTEXT_BYTES
         || region_off < CONTRACT_CONTEXT_BYTES
