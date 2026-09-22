@@ -79,14 +79,17 @@ fn cmd_info(args: &[String]) -> Result<(), String> {
 
 fn cmd_register(args: &[String]) -> Result<(), String> {
     let (mainnet, args) = take_flag(args, "--mainnet");
+    let (testnet, args) = take_flag(&args, "--testnet");
     if args.len() < 3 {
         return Err(
-            "usage: qcore register [--mainnet] <gateway-url> <seed-hex> <max-fee>".to_string(),
+            "usage: qcore register [--mainnet|--testnet] <gateway-url> <seed-hex> <max-fee>"
+                .to_string(),
         );
     }
     let seed = read_seed(&args[1])?;
     let max_fee: u128 = args[2].parse().map_err(|_| "the max fee is not a number")?;
-    let (_signed, outcome) = build_client(&args[0], mainnet).register(&seed, 0, max_fee)?;
+    let (_signed, outcome) =
+        build_client(&args[0], mainnet, testnet).register(&seed, 0, max_fee)?;
     match outcome {
         Submit::Accepted { state, tx_id } => {
             println!("registered {tx_id}");
@@ -118,9 +121,10 @@ fn cmd_balance(args: &[String]) -> Result<(), String> {
 
 fn cmd_send(args: &[String]) -> Result<(), String> {
     let (mainnet, args) = take_flag(args, "--mainnet");
+    let (testnet, args) = take_flag(&args, "--testnet");
     if args.len() < 5 {
         return Err(
-            "usage: qcore send [--mainnet] <gateway-url> <seed-hex> <to> <amount> <max-fee>"
+            "usage: qcore send [--mainnet|--testnet] <gateway-url> <seed-hex> <to> <amount> <max-fee>"
                 .to_string(),
         );
     }
@@ -129,7 +133,7 @@ fn cmd_send(args: &[String]) -> Result<(), String> {
     let amount: u64 = args[3].parse().map_err(|_| "the amount is not a number")?;
     let max_fee: u128 = args[4].parse().map_err(|_| "the max fee is not a number")?;
     let (_signed, outcome) =
-        build_client(&args[0], mainnet).transfer(&seed, 0, to, amount, max_fee)?;
+        build_client(&args[0], mainnet, testnet).transfer(&seed, 0, to, amount, max_fee)?;
     match outcome {
         Submit::Accepted { state, tx_id } => {
             println!("submitted {tx_id}");
@@ -209,9 +213,11 @@ fn take_flag(args: &[String], flag: &str) -> (bool, Vec<String>) {
     (present, kept)
 }
 
-fn build_client(gateway: &str, mainnet: bool) -> Client {
+fn build_client(gateway: &str, mainnet: bool, testnet: bool) -> Client {
     if mainnet {
         Client::with_network(gateway.to_string(), Network::mainnet(), true)
+    } else if testnet {
+        Client::with_network(gateway.to_string(), Network::testnet(), false)
     } else {
         Client::new(gateway.to_string())
     }

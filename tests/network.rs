@@ -115,32 +115,30 @@ fn a_testnet_network_carries_its_identifiers() {
     let testnet = Network::testnet();
     assert_eq!(
         testnet.chain_id.as_deref(),
-        Some("Q-test-net-1"),
+        Some("Q-test-net-3"),
         "testnet chain id"
     );
     assert_eq!(
-        testnet.rpc_url.as_deref(),
-        Some("https://rpc-testnet.quantova.org"),
-        "testnet rpc url"
+        testnet.rpc_url, None,
+        "the rust transport reaches only a loopback node, so testnet names no public url"
     );
     assert_eq!(testnet.denomination, "Quon", "testnet denomination");
     assert_eq!(testnet.decimals, 6, "testnet decimals are six");
     assert!(!testnet.is_mainnet, "testnet is not mainnet");
     assert!(Network::mainnet().is_mainnet, "mainnet is flagged");
-    assert_ne!(
-        Network::mainnet().rpc_url,
-        testnet.rpc_url,
-        "mainnet rpc is not the testnet url"
-    );
 }
 
 #[test]
 fn a_client_from_a_network_carries_that_network() {
-    let client = Client::for_network(Network::testnet(), false).expect("testnet opens");
+    let client = Client::with_network("http://127.0.0.1:1", Network::testnet(), false);
     assert_eq!(
         client.network().chain_id.as_deref(),
-        Some("Q-test-net-1"),
+        Some("Q-test-net-3"),
         "the client carries its configured network"
+    );
+    assert!(
+        Client::for_network(Network::testnet(), false).is_err(),
+        "testnet has no default endpoint the rust transport can reach"
     );
 }
 

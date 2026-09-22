@@ -64,7 +64,7 @@ fn spawn_gateway(fee_quon: u128) -> (u16, Arc<AtomicUsize>) {
                 .unwrap_or("");
             let body = match path {
                 "/v1/node_info" => format!(
-                    "{{\"chain_id\":\"Q-test-net-1\",\"genesis_hash\":\"Qgen\",\"head_height\":10,\
+                    "{{\"chain_id\":\"Q-dev-net-1\",\"genesis_hash\":\"Qgen\",\"head_height\":10,\
                      \"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"{fee_quon}\"}},\
                      \"version\":\"test\"}}"
                 ),
@@ -138,24 +138,19 @@ fn transfer_at_or_below_the_ceiling_signs_and_submits() {
 }
 
 #[test]
-fn a_nonce_below_the_expected_one_is_refused() {
-    let (port, submits) = spawn_gateway(1000);
+fn a_gateway_nonce_below_the_expected_one_signs_at_the_expected_one() {
+    let (port, _) = spawn_gateway(1000);
     let client = Client::new(format!("http://127.0.0.1:{port}"));
     let seed = [11u8; 32];
     let to = account_address(&seed, 1);
+    let chain_id = qcore::chain_id_from_name("Q-dev-net-1");
+    let until = 10 + qcore::DEFAULT_VALIDITY_BLOCKS;
 
-    let err = client
+    let (signed, _) = client
         .transfer_expecting(&seed, 0, &to, 1000, 1000, Some(5))
-        .expect_err("a nonce below the expected one must be refused");
-    assert!(
-        err.contains("below the expected"),
-        "unexpected error: {err}"
-    );
-    assert_eq!(
-        submits.load(Ordering::SeqCst),
-        0,
-        "a refused transfer never reaches submit"
-    );
+        .expect("an expected nonce ahead of the gateway is a pending slot");
+    let at_five = qcore::sign_transfer(&seed, 0, &to, 1000, 5, 1000, chain_id, until).unwrap();
+    assert_eq!(signed.tx_bytes, at_five.tx_bytes);
 }
 
 #[test]
@@ -164,25 +159,36 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
     let client = Client::new(format!("http://127.0.0.1:{port}"));
     let seed = [11u8; 32];
     let to = account_address(&seed, 1);
-    let chain_id = qcore::chain_id_from_name("Q-test-net-1");
+    let chain_id = qcore::chain_id_from_name("Q-dev-net-1");
     let until = 10 + qcore::DEFAULT_VALIDITY_BLOCKS;
+    let call_fee = qcore::vm_call_fee(500, 21_000);
 
     let (signed, _) = client.transfer(&seed, 0, &to, 1000, 1000).unwrap();
     let expected = qcore::sign_transfer(&seed, 0, &to, 1000, 0, 500, chain_id, until).unwrap();
     assert_eq!(signed.tx_bytes, expected.tx_bytes);
 
     let (signed, _) = client
-        .call(&seed, 0, &to, vec![1, 2], 21_000, 1000)
+        .call(&seed, 0, &to, vec![1, 2], 21_000, call_fee)
         .unwrap();
-    let expected =
-        qcore::sign_call(&seed, 0, &to, vec![1, 2], 0, 21_000, 500, chain_id, until).unwrap();
+    let expected = qcore::sign_call(
+        &seed,
+        0,
+        &to,
+        vec![1, 2],
+        1,
+        21_000,
+        call_fee,
+        chain_id,
+        until,
+    )
+    .unwrap();
     assert_eq!(signed.tx_bytes, expected.tx_bytes);
 
     let (signed, _) = client.register(&seed, 0, 1000).unwrap();
-    let expected = qcore::sign_register(&seed, 0, 0, 500, chain_id, until).unwrap();
+    let expected = qcore::sign_register(&seed, 0, 2, 500, chain_id, until).unwrap();
     assert_eq!(signed.tx_bytes, expected.tx_bytes);
 
-    let unbounded = qcore::sign_register(&seed, 0, 0, 500, chain_id, 0).unwrap();
+    let unbounded = qcore::sign_register(&seed, 0, 2, 500, chain_id, 0).unwrap();
     assert_ne!(
         signed.tx_bytes, unbounded.tx_bytes,
         "the window is signed, not implied"
@@ -190,28 +196,17 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
 }
 
 #[test]
-fn every_client_signing_path_takes_an_expected_nonce() {
+fn a_contract_call_refuses_a_ceiling_below_its_meter_fee() {
     let (port, submits) = spawn_gateway(500);
     let client = Client::new(format!("http://127.0.0.1:{port}"));
     let seed = [11u8; 32];
     let to = account_address(&seed, 1);
-    let refused = [
-        client
-            .call_payable_expecting(&seed, 0, &to, vec![1], 0, 21_000, 1000, Some(9))
-            .map(|_| ()),
-        client
-            .register_expecting(&seed, 0, 1000, Some(9))
-            .map(|_| ()),
-    ];
-    for outcome in refused {
-        let err = outcome.expect_err("a gateway nonce below the expected one is refused");
-        assert!(
-            err.contains("below the expected"),
-            "unexpected error: {err}"
-        );
-    }
+    let err = client
+        .call_payable_expecting(&seed, 0, &to, vec![1], 0, 21_000, 1000, None)
+        .expect_err("the meter fee is above a ceiling of one transfer fee");
+    assert!(err.contains("above the maximum"), "unexpected error: {err}");
     assert_eq!(submits.load(Ordering::SeqCst), 0);
     assert!(client
-        .call_payable_expecting(&seed, 0, &to, vec![1], 0, 21_000, 1000, Some(0))
+        .call_payable_expecting(&seed, 0, &to, vec![1], 0, 21_000, 9_000, Some(0))
         .is_ok());
 }

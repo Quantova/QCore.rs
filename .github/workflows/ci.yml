@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: Quantova/QVM
-          ref: 4a4dd975d61ceafd18d768b69e11d9f1403f78b0
+          ref: 0026c817d09da828b458d2d82b89ae1c7afc151c
           path: QVM
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master

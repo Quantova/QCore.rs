@@ -20,7 +20,11 @@ pub use qtv_tx::{
 
 pub const SEED_LEN: usize = 32;
 
-pub const MAX_NONCE_GAP: u64 = 16;
+pub const MAX_PLAUSIBLE_HEAD: u64 = 1 << 40;
+
+const HEAD_BLOCKS_PER_SEC: u64 = 4;
+
+const HEAD_SLACK_SECS: u64 = 60;
 
 pub const ADDRESS_PAYLOAD_LEN: usize = 32;
 
@@ -45,8 +49,8 @@ impl Network {
     pub fn testnet() -> Network {
         Network {
             name: "testnet".to_string(),
-            chain_id: Some("Q-test-net-1".to_string()),
-            rpc_url: Some("https://rpc-testnet.quantova.org".to_string()),
+            chain_id: Some("Q-test-net-3".to_string()),
+            rpc_url: None,
             explorer_url: Some("https://qvmscan.io".to_string()),
             denomination: DENOMINATION.to_string(),
             decimals: DECIMALS,
@@ -277,6 +281,16 @@ pub fn valid_until_from(info: &NodeInfo) -> u64 {
     info.head_height.saturating_add(DEFAULT_VALIDITY_BLOCKS)
 }
 
+pub fn vm_call_fee(transfer_fee: u128, meter_limit: u64) -> u128 {
+    transfer_fee.saturating_mul(u128::from(
+        meter_limit.div_ceil(NATIVE_TRANSFER_METER).max(1),
+    ))
+}
+
+fn is_public_chain(name: &str) -> bool {
+    name.starts_with("Q-test-net-") || name.starts_with("Q-main-net-")
+}
+
 pub fn submit_body(tx_bytes: &[u8]) -> String {
     object(vec![("tx", Json::str(to_hex(tx_bytes)))]).render()
 }
@@ -384,15 +398,17 @@ pub fn mnemonic_from_seed(seed: &[u8; SEED_LEN]) -> String {
     for shift in (0..8).rev() {
         bits.push((checksum >> shift) & 1);
     }
-    bits.chunks(11)
-        .map(|chunk| {
-            let index = chunk
-                .iter()
-                .fold(0usize, |acc, &bit| (acc << 1) | bit as usize);
-            words[index]
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut phrase = String::with_capacity(24 * 9);
+    for chunk in bits.chunks(11) {
+        let index = chunk
+            .iter()
+            .fold(0usize, |acc, &bit| (acc << 1) | bit as usize);
+        if !phrase.is_empty() {
+            phrase.push(' ');
+        }
+        phrase.push_str(words[index]);
+    }
+    phrase
 }
 
 pub fn seed_from_mnemonic(phrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>, String> {
@@ -506,10 +522,29 @@ pub use client::Client;
 mod client {
     use super::*;
 
+    fn order_slot_key(contract: &str, signer: &[u8; 32]) -> String {
+        let hex: String = signer.iter().map(|b| format!("{b:02x}")).collect();
+        format!("{contract}/{hex}")
+    }
+
     pub struct Client {
         base: String,
         network: Network,
         acknowledge_mainnet: bool,
+        pinned_chain: std::cell::RefCell<Option<String>>,
+        head_floor: std::cell::Cell<Option<(u64, std::time::Instant)>>,
+        next_nonces: std::cell::RefCell<std::collections::HashMap<String, u64>>,
+    }
+
+    fn fresh(base: String, network: Network, acknowledge_mainnet: bool) -> Client {
+        Client {
+            base: normalize_base(base),
+            network,
+            acknowledge_mainnet,
+            pinned_chain: std::cell::RefCell::new(None),
+            head_floor: std::cell::Cell::new(None),
+            next_nonces: std::cell::RefCell::new(std::collections::HashMap::new()),
+        }
     }
 
     fn normalize_base(base: String) -> String {
@@ -520,11 +555,7 @@ mod client {
         pub fn new(base: impl Into<String>) -> Client {
             let base = base.into();
             let network = Network::for_url(base.clone());
-            Client {
-                base: normalize_base(base),
-                network,
-                acknowledge_mainnet: false,
-            }
+            fresh(base, network, false)
         }
 
         pub fn for_network(network: Network, acknowledge_mainnet: bool) -> Result<Client, String> {
@@ -537,11 +568,7 @@ mod client {
             if network.is_mainnet && !acknowledge_mainnet {
                 return Err("refusing to open a mainnet client without acknowledging it, a mainnet transaction moves real value so the network must be chosen on purpose".to_string());
             }
-            Ok(Client {
-                base: normalize_base(base),
-                network,
-                acknowledge_mainnet,
-            })
+            Ok(fresh(base, network, acknowledge_mainnet))
         }
 
         pub fn with_network(
@@ -549,11 +576,7 @@ mod client {
             network: Network,
             acknowledge_mainnet: bool,
         ) -> Client {
-            Client {
-                base: normalize_base(base.into()),
-                network,
-                acknowledge_mainnet,
-            }
+            fresh(base.into(), network, acknowledge_mainnet)
         }
 
         pub fn network(&self) -> &Network {
@@ -584,6 +607,22 @@ mod client {
                     return Err(format!(
                         "the gateway reports chain {name} but this client is configured for {configured}, refusing to sign a transaction that would be valid on a network you did not choose"
                     ));
+                }
+            } else {
+                if is_public_chain(name) && !(is_mainnet && self.acknowledge_mainnet) {
+                    return Err(format!(
+                        "the gateway reports the public chain {name} but this client was opened for an unnamed network, configure the testnet or mainnet network before signing for it"
+                    ));
+                }
+                let mut pinned = self.pinned_chain.borrow_mut();
+                match pinned.as_ref() {
+                    Some(first) if first != name => {
+                        return Err(format!(
+                            "the gateway reported {first} earlier in this session and now reports {name}, refusing to sign"
+                        ));
+                    }
+                    Some(_) => {}
+                    None => *pinned = Some(name.clone()),
                 }
             }
             if is_mainnet && !self.acknowledge_mainnet {
@@ -660,6 +699,7 @@ mod client {
             let sender = account_address(seed, index);
             let nonce = self.checked_nonce(&sender, expected_nonce)?;
             let chain_id = self.signing_chain_id(&info)?;
+            let valid_until = self.validity(&info)?;
             let signed = sign_transfer(
                 seed,
                 index,
@@ -668,30 +708,81 @@ mod client {
                 nonce,
                 info.transfer_fee,
                 chain_id,
-                valid_until_from(&info),
+                valid_until,
             )?;
             let outcome = self.submit(&signed.tx_bytes)?;
+            self.remember_used(&sender, nonce, &outcome);
             Ok((signed, outcome))
         }
 
         fn checked_nonce(&self, sender: &str, expected: Option<u64>) -> Result<u64, String> {
             let account = self.account(sender)?;
-            if let Some(exp) = expected {
-                if account.nonce < exp {
-                    return Err(format!(
-                        "the gateway reported nonce {} below the expected {exp}; refusing so a \
-                         replayed lower nonce cannot force a second payment",
-                        account.nonce
-                    ));
-                }
-                if account.nonce > exp.saturating_add(MAX_NONCE_GAP) {
-                    return Err(format!(
-                        "the gateway reported nonce {} far above the expected {exp}; refusing",
-                        account.nonce
-                    ));
-                }
+            self.expected_slot(sender, account.nonce, expected)
+        }
+
+        fn expected_slot(
+            &self,
+            key: &str,
+            reported: u64,
+            expected: Option<u64>,
+        ) -> Result<u64, String> {
+            let local = self.next_nonces.borrow().get(key).copied();
+            match expected.or(local) {
+                Some(exp) if reported > exp => Err(format!(
+                    "the gateway reported nonce {reported} above the expected {exp}; refusing so a \
+                     signature cannot be banked for a nonce the account has not reached"
+                )),
+                Some(exp) => Ok(exp),
+                None => Ok(reported),
             }
-            Ok(account.nonce)
+        }
+
+        fn remember_used(&self, key: &str, used: u64, outcome: &Submit) {
+            if matches!(outcome, Submit::Accepted { .. }) {
+                self.next_nonces
+                    .borrow_mut()
+                    .insert(key.to_string(), used.saturating_add(1));
+            }
+        }
+
+        fn validity(&self, info: &NodeInfo) -> Result<u64, String> {
+            let head = info.head_height;
+            if head > MAX_PLAUSIBLE_HEAD {
+                return Err(format!(
+                    "the gateway reports head {head}, past any height this chain can have reached, refusing to sign"
+                ));
+            }
+            let now = std::time::Instant::now();
+            match self.head_floor.get() {
+                Some((floor, at)) => {
+                    if head < floor {
+                        return Err(format!(
+                            "the gateway reports head {head} below the {floor} it reported earlier, refusing to sign"
+                        ));
+                    }
+                    let allowed = now
+                        .duration_since(at)
+                        .as_secs()
+                        .saturating_add(HEAD_SLACK_SECS)
+                        .saturating_mul(HEAD_BLOCKS_PER_SEC);
+                    if head > floor.saturating_add(allowed) {
+                        return Err(format!(
+                            "the gateway head leapt from {floor} to {head} faster than blocks are made, refusing to sign"
+                        ));
+                    }
+                }
+                None => self.head_floor.set(Some((head, now))),
+            }
+            Ok(valid_until_from(info))
+        }
+
+        fn fee_within(&self, fee: u128, max_fee: u128) -> Result<u128, String> {
+            if fee > max_fee {
+                return Err(format!(
+                    "the fee {fee} is above the maximum you allowed {max_fee}, refusing to sign"
+                ));
+            }
+            Ok(fee)
         }
 
         pub fn call(
@@ -746,15 +837,11 @@ mod client {
             }
             let info = self.node_info()?;
             self.guard_mainnet()?;
-            if info.transfer_fee > max_fee {
-                return Err(format!(
-                    "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
-                    info.transfer_fee
-                ));
-            }
+            let fee = self.fee_within(vm_call_fee(info.transfer_fee, meter_limit), max_fee)?;
             let sender = account_address(seed, index);
             let nonce = self.checked_nonce(&sender, expected_nonce)?;
             let chain_id = self.signing_chain_id(&info)?;
+            let valid_until = self.validity(&info)?;
             let signed = sign_payable_call(
                 seed,
                 index,
@@ -763,11 +850,12 @@ mod client {
                 value,
                 nonce,
                 meter_limit,
-                info.transfer_fee,
+                fee,
                 chain_id,
-                valid_until_from(&info),
+                valid_until,
             )?;
             let outcome = self.submit(&signed.tx_bytes)?;
+            self.remember_used(&sender, nonce, &outcome);
             Ok((signed, outcome))
         }
 
@@ -811,15 +899,11 @@ mod client {
         ) -> Result<(SignedTransfer, Submit), String> {
             let info = self.node_info()?;
             self.guard_mainnet()?;
-            if info.transfer_fee > max_fee {
-                return Err(format!(
-                    "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
-                    info.transfer_fee
-                ));
-            }
+            let fee = self.fee_within(vm_call_fee(info.transfer_fee, meter_limit), max_fee)?;
             let sender = account_address(seed, index);
             let nonce = self.checked_nonce(&sender, expected_nonce)?;
             let chain_id = self.signing_chain_id(&info)?;
+            let valid_until = self.validity(&info)?;
             let signed = sign_asset_call(
                 seed,
                 index,
@@ -829,11 +913,12 @@ mod client {
                 amount,
                 nonce,
                 meter_limit,
-                info.transfer_fee,
+                fee,
                 chain_id,
-                valid_until_from(&info),
+                valid_until,
             )?;
             let outcome = self.submit(&signed.tx_bytes)?;
+            self.remember_used(&sender, nonce, &outcome);
             Ok((signed, outcome))
         }
 
@@ -898,6 +983,7 @@ mod client {
                 meter_limit,
                 max_fee,
                 None,
+                None,
             )
         }
 
@@ -915,21 +1001,22 @@ mod client {
             meter_limit: u64,
             max_fee: u128,
             expected_nonce: Option<u64>,
+            expected_order_nonce: Option<u64>,
         ) -> Result<(SignedTransfer, Submit, contract::SignedOrderCall), String> {
             if !valid_address(contract) {
                 return Err("the contract is not a Q1 address".to_string());
             }
             let info = self.node_info()?;
             self.guard_mainnet()?;
-            if info.transfer_fee > max_fee {
-                return Err(format!(
-                    "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
-                    info.transfer_fee
-                ));
-            }
+            let fee = self.fee_within(vm_call_fee(info.transfer_fee, meter_limit), max_fee)?;
             let chain_id = self.signing_chain_id(&info)?;
             let signer = contract::order_signer(owner_seed, owner_index);
-            let nonce = self.contract_nonce(contract, &signer)?;
+            let order_key = order_slot_key(contract, &signer);
+            let nonce = self.expected_slot(
+                &order_key,
+                self.contract_nonce(contract, &signer)?,
+                expected_order_nonce,
+            )?;
             let order = contract::build_signed_order_call(
                 chain_id,
                 contract,
@@ -942,6 +1029,7 @@ mod client {
             )?;
             let caller = account_address(caller_seed, caller_index);
             let account_nonce = self.checked_nonce(&caller, expected_nonce)?;
+            let valid_until = self.validity(&info)?;
             let signed = sign_call(
                 caller_seed,
                 caller_index,
@@ -949,11 +1037,13 @@ mod client {
                 order.call_args.clone(),
                 account_nonce,
                 meter_limit,
-                info.transfer_fee,
+                fee,
                 chain_id,
-                valid_until_from(&info),
+                valid_until,
             )?;
             let outcome = self.submit(&signed.tx_bytes)?;
+            self.remember_used(&caller, account_nonce, &outcome);
+            self.remember_used(&order_key, nonce, &outcome);
             Ok((signed, outcome, order))
         }
 
@@ -991,6 +1081,7 @@ mod client {
                 meter_limit,
                 max_fee,
                 None,
+                None,
             )
         }
 
@@ -1012,21 +1103,22 @@ mod client {
             meter_limit: u64,
             max_fee: u128,
             expected_nonce: Option<u64>,
+            expected_order_nonce: Option<u64>,
         ) -> Result<(SignedTransfer, Submit, contract::SignedOrderCall), String> {
             if !valid_address(contract) {
                 return Err("the contract is not a Q1 address".to_string());
             }
             let info = self.node_info()?;
             self.guard_mainnet()?;
-            if info.transfer_fee > max_fee {
-                return Err(format!(
-                    "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
-                    info.transfer_fee
-                ));
-            }
+            let fee = self.fee_within(vm_call_fee(info.transfer_fee, meter_limit), max_fee)?;
             let chain_id = self.signing_chain_id(&info)?;
             let signer = contract::order_signer(owner_seed, owner_index);
-            let nonce = self.contract_nonce(contract, &signer)?;
+            let order_key = order_slot_key(contract, &signer);
+            let nonce = self.expected_slot(
+                &order_key,
+                self.contract_nonce(contract, &signer)?,
+                expected_order_nonce,
+            )?;
             let order = contract::build_typed_order_call(
                 chain_id,
                 contract,
@@ -1041,6 +1133,7 @@ mod client {
             )?;
             let caller = account_address(caller_seed, caller_index);
             let account_nonce = self.checked_nonce(&caller, expected_nonce)?;
+            let valid_until = self.validity(&info)?;
             let args = order.call_args.clone();
             let signed = match in_asset {
                 Some(issuer) => sign_asset_call(
@@ -1052,9 +1145,9 @@ mod client {
                     value,
                     account_nonce,
                     meter_limit,
-                    info.transfer_fee,
+                    fee,
                     chain_id,
-                    valid_until_from(&info),
+                    valid_until,
                 )?,
                 None => sign_payable_call(
                     caller_seed,
@@ -1064,12 +1157,14 @@ mod client {
                     value,
                     account_nonce,
                     meter_limit,
-                    info.transfer_fee,
+                    fee,
                     chain_id,
-                    valid_until_from(&info),
+                    valid_until,
                 )?,
             };
             let outcome = self.submit(&signed.tx_bytes)?;
+            self.remember_used(&caller, account_nonce, &outcome);
+            self.remember_used(&order_key, nonce, &outcome);
             Ok((signed, outcome, order))
         }
 
@@ -1106,18 +1201,14 @@ mod client {
         ) -> Result<(SignedTransfer, Submit, String), String> {
             let info = self.node_info()?;
             self.guard_mainnet()?;
-            if info.transfer_fee > max_fee {
-                return Err(format!(
-                    "the gateway fee {} is above the maximum you allowed {max_fee}, refusing to sign",
-                    info.transfer_fee
-                ));
-            }
+            let fee = self.fee_within(vm_call_fee(info.transfer_fee, meter_limit), max_fee)?;
             let deployer = account_address(seed, index);
             let account_nonce = self.checked_nonce(&deployer, expected_nonce)?;
             let args = contract::build_deploy_call(container, params);
             let contract = contract_address(&deployer, account_nonce)
                 .ok_or("the deployer is not a Q1 address")?;
             let chain_id = self.signing_chain_id(&info)?;
+            let valid_until = self.validity(&info)?;
             let signed = sign_call(
                 seed,
                 index,
@@ -1125,11 +1216,12 @@ mod client {
                 args,
                 account_nonce,
                 meter_limit,
-                info.transfer_fee,
+                fee,
                 chain_id,
-                valid_until_from(&info),
+                valid_until,
             )?;
             let outcome = self.submit(&signed.tx_bytes)?;
+            self.remember_used(&deployer, account_nonce, &outcome);
             Ok((signed, outcome, contract))
         }
 
@@ -1173,16 +1265,70 @@ mod client {
             let sender = account_address(seed, index);
             let nonce = self.checked_nonce(&sender, expected_nonce)?;
             let chain_id = self.signing_chain_id(&info)?;
-            let signed = sign_register(
-                seed,
-                index,
-                nonce,
-                info.transfer_fee,
-                chain_id,
-                valid_until_from(&info),
-            )?;
+            let valid_until = self.validity(&info)?;
+            let signed =
+                sign_register(seed, index, nonce, info.transfer_fee, chain_id, valid_until)?;
             let outcome = self.submit(&signed.tx_bytes)?;
+            self.remember_used(&sender, nonce, &outcome);
             Ok((signed, outcome))
+        }
+    }
+
+    #[cfg(test)]
+    mod session_tests {
+        use super::*;
+
+        fn info(chain: &str, head: u64) -> NodeInfo {
+            NodeInfo {
+                chain_id: chain.to_string(),
+                genesis_hash: String::new(),
+                head_height: head,
+                denomination: DENOMINATION.to_string(),
+                transfer_fee: 500,
+                version: String::new(),
+            }
+        }
+
+        #[test]
+        fn an_unnamed_client_refuses_a_public_chain_and_pins_the_first_private_one() {
+            let client = Client::new("http://127.0.0.1:1");
+            assert!(client.signing_chain_id(&info("Q-test-net-3", 1)).is_err());
+            assert!(client.signing_chain_id(&info("Q-main-net-1", 1)).is_err());
+            assert!(client.signing_chain_id(&info("Q-dev-net-7", 1)).is_ok());
+            assert!(client.signing_chain_id(&info("Q-dev-net-8", 1)).is_err());
+        }
+
+        #[test]
+        fn a_head_past_the_plausible_range_or_leaping_is_refused() {
+            let client = Client::new("http://127.0.0.1:1");
+            assert!(client.validity(&info("Q-dev-net-7", u64::MAX)).is_err());
+            assert_eq!(
+                client.validity(&info("Q-dev-net-7", 1_000)).unwrap(),
+                1_000 + DEFAULT_VALIDITY_BLOCKS
+            );
+            assert!(client.validity(&info("Q-dev-net-7", 999)).is_err());
+            assert!(client
+                .validity(&info("Q-dev-net-7", 1_000 + 10_000))
+                .is_err());
+            assert!(client.validity(&info("Q-dev-net-7", 1_010)).is_ok());
+        }
+
+        #[test]
+        fn a_reported_nonce_above_the_expected_one_is_refused() {
+            let client = Client::new("http://127.0.0.1:1");
+            assert_eq!(client.expected_slot("a", 4, None).unwrap(), 4);
+            client.remember_used(
+                "a",
+                4,
+                &Submit::Accepted {
+                    state: String::new(),
+                    tx_id: String::new(),
+                },
+            );
+            assert_eq!(client.expected_slot("a", 4, None).unwrap(), 5);
+            assert!(client.expected_slot("a", 7, None).is_err());
+            assert!(client.expected_slot("b", 9, Some(3)).is_err());
+            assert_eq!(client.expected_slot("b", 2, Some(3)).unwrap(), 3);
         }
     }
 }
@@ -1190,6 +1336,14 @@ mod client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_contract_call_pays_one_transfer_fee_per_transfer_meter() {
+        assert_eq!(vm_call_fee(500, 1), 500);
+        assert_eq!(vm_call_fee(500, NATIVE_TRANSFER_METER), 500);
+        assert_eq!(vm_call_fee(500, NATIVE_TRANSFER_METER + 1), 1_000);
+        assert_eq!(vm_call_fee(500, 12_000_000), 500 * 9_918);
+    }
 
     #[test]
     fn a_transfer_is_a_call_that_encodes_the_amount() {
@@ -1530,8 +1684,12 @@ mod tests {
             "a url client with no chosen network must refuse a mainnet reporting gateway"
         );
         assert!(
-            client.signing_chain_id(&info("Q-test-net-1")).is_ok(),
-            "the same client still signs for a testnet gateway"
+            client.signing_chain_id(&info("Q-test-net-3")).is_err(),
+            "a url client must be configured before it signs for the public testnet"
+        );
+        assert!(
+            client.signing_chain_id(&info("Q-dev-net-1")).is_ok(),
+            "the same client still signs for a private dev chain"
         );
     }
 
