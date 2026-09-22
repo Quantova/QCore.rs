@@ -939,20 +939,29 @@ mod client {
             field_u128(&json::parse(&response)?, "balance")
         }
 
-        pub fn contract_nonce(&self, contract: &str, signer: &[u8; 32]) -> Result<u64, String> {
-            let key = crate::contract::nonce_slot_key(signer);
+        pub fn storage_at(
+            &self,
+            contract: &str,
+            keys: &[[u8; 32]],
+        ) -> Result<Vec<contract::StorageSlot>, String> {
+            contract::parse_storage(
+                &self.rpc("get_storage_at", contract::storage_at_body(contract, keys))?,
+            )
+        }
+
+        fn slot_value(&self, contract: &str, key: &[u8; 32]) -> Result<u64, String> {
             Ok(crate::contract::storage_value(
-                &self.storage(contract)?,
-                &key,
+                &self.storage_at(contract, std::slice::from_ref(key))?,
+                key,
             ))
         }
 
+        pub fn contract_nonce(&self, contract: &str, signer: &[u8; 32]) -> Result<u64, String> {
+            self.slot_value(contract, &crate::contract::nonce_slot_key(signer))
+        }
+
         pub fn contract_scalar(&self, contract: &str, slot: u64) -> Result<u64, String> {
-            let key = crate::contract::scalar_slot_key(slot);
-            Ok(crate::contract::storage_value(
-                &self.storage(contract)?,
-                &key,
-            ))
+            self.slot_value(contract, &crate::contract::scalar_slot_key(slot))
         }
 
         #[allow(clippy::too_many_arguments)]
@@ -1229,11 +1238,10 @@ mod client {
             map_domain_tag: u64,
             key: &[u8; 32],
         ) -> Result<u64, String> {
-            let slot = crate::contract::map_slot_key(map_domain_tag, key);
-            Ok(crate::contract::storage_value(
-                &self.storage(contract)?,
-                &slot,
-            ))
+            self.slot_value(
+                contract,
+                &crate::contract::map_slot_key(map_domain_tag, key),
+            )
         }
 
         pub fn register(
@@ -1275,6 +1283,56 @@ mod client {
     #[cfg(test)]
     mod session_tests {
         use super::*;
+
+        #[test]
+        fn an_order_nonce_is_read_by_its_own_key() {
+            use std::io::{Read, Write};
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let signer = [9u8; 32];
+            let key = json::to_hex(&crate::contract::nonce_slot_key(&signer));
+            let expected = key.clone();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    let n = stream.read(&mut buf).unwrap();
+                    raw.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&raw);
+                    if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                        let len: usize = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("Content-Length: "))
+                            .unwrap()
+                            .trim()
+                            .parse()
+                            .unwrap();
+                        if body.len() >= len {
+                            break;
+                        }
+                    }
+                }
+                let request = String::from_utf8_lossy(&raw).to_string();
+                let body = format!(
+                    "{{\"address\":\"x\",\"slots\":[{{\"slot\":\"{expected}\",\"value\":\"7\"}}]}}"
+                );
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(reply.as_bytes()).unwrap();
+                request
+            });
+            let contract = contract_address(&account_address(&[1u8; 32], 0), 0).unwrap();
+            let nonce = Client::new(base)
+                .contract_nonce(&contract, &signer)
+                .unwrap();
+            let request = server.join().unwrap();
+            assert_eq!(nonce, 7);
+            assert!(request.starts_with("POST /v1/get_storage_at "));
+            assert!(request.contains(&key));
+        }
 
         fn info(chain: &str, head: u64) -> NodeInfo {
             NodeInfo {

@@ -563,6 +563,17 @@ pub fn storage_body(address: &str) -> String {
     object(vec![("address", Json::str(address))]).render()
 }
 
+pub fn storage_at_body(address: &str, keys: &[[u8; 32]]) -> String {
+    object(vec![
+        ("address", Json::str(address)),
+        (
+            "keys",
+            Json::Array(keys.iter().map(|k| Json::str(json::to_hex(k))).collect()),
+        ),
+    ])
+    .render()
+}
+
 pub fn events_body(height: u64) -> String {
     object(vec![("height", Json::Int(height))]).render()
 }
