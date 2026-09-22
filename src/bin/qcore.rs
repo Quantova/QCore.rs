@@ -250,7 +250,7 @@ fn read_seed(source: &str) -> Result<Zeroizing<[u8; 32]>, String> {
 
 fn parse_seed(hex: &str) -> Result<Zeroizing<[u8; 32]>, String> {
     let hex = hex.trim();
-    if hex.len() != 64 {
+    if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("a seed is sixty four hex characters".to_string());
     }
     let mut seed = Zeroizing::new([0u8; 32]);
@@ -267,5 +267,16 @@ fn parse_index(arg: Option<&String>) -> Result<u64, String> {
             .parse()
             .map_err(|_| "the index is not a number".to_string()),
         None => Ok(0),
+    }
+}
+
+#[cfg(test)]
+mod seed_tests {
+    use super::*;
+
+    #[test]
+    fn a_seed_with_a_sign_character_is_refused() {
+        assert!(parse_seed(&format!("+a{}", "b".repeat(62))).is_err());
+        assert!(parse_seed(&"ab".repeat(32)).is_ok());
     }
 }
