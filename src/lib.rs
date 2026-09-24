@@ -133,6 +133,35 @@ pub fn sign_payable_call(
     chain_id: u64,
     valid_until: u64,
 ) -> Result<SignedTransfer, String> {
+    sign_native(
+        seed,
+        index,
+        target,
+        args,
+        value,
+        nonce,
+        meter_limit,
+        fee,
+        chain_id,
+        valid_until,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sign_native(
+    seed: &[u8; SEED_LEN],
+    index: u64,
+    target: &str,
+    args: Vec<u8>,
+    value: u64,
+    nonce: u64,
+    meter_limit: u64,
+    fee: u128,
+    chain_id: u64,
+    valid_until: u64,
+    calls_code: bool,
+) -> Result<SignedTransfer, String> {
     if !valid_address(target) {
         return Err("the target is not a Q1 address".to_string());
     }
@@ -147,6 +176,11 @@ pub fn sign_payable_call(
         value,
         chain_id,
     )
+    .with_kind(if calls_code {
+        qtv_tx::KIND_CALL
+    } else {
+        qtv_tx::KIND_TRANSFER
+    })
     .valid_until(valid_until);
     let wrapper = sign(&sender, &body);
     Ok(SignedTransfer {
@@ -217,6 +251,7 @@ pub fn sign_asset_call(
         amount,
         chain_id,
     )
+    .calling()
     .carrying(issuer32)
     .valid_until(valid_until);
     let wrapper = sign(&sender, &body);
@@ -240,16 +275,18 @@ pub fn sign_transfer(
 ) -> Result<SignedTransfer, String> {
     let mut encoder = Encoder::new();
     encoder.put_u64(amount);
-    sign_call(
+    sign_native(
         seed,
         index,
         to,
         encoder.into_bytes(),
+        0,
         nonce,
         NATIVE_TRANSFER_METER,
         fee,
         chain_id,
         valid_until,
+        false,
     )
 }
 
@@ -262,16 +299,18 @@ pub fn sign_register(
     valid_until: u64,
 ) -> Result<SignedTransfer, String> {
     let public_key = account_public_key(seed, index);
-    sign_call(
+    sign_native(
         seed,
         index,
         &key_register_address(),
         public_key,
+        0,
         nonce,
         NATIVE_TRANSFER_METER,
         fee,
         chain_id,
         valid_until,
+        false,
     )
 }
 
@@ -1411,7 +1450,7 @@ mod tests {
     }
 
     #[test]
-    fn a_transfer_is_a_call_that_encodes_the_amount() {
+    fn a_transfer_and_a_call_are_distinct_transactions() {
         let seed = [7u8; SEED_LEN];
         let to = account_address(&seed, 0);
         let transfer = sign_transfer(&seed, 0, &to, 1000, 3, 500, LOCAL_CHAIN_ID, 0).unwrap();
@@ -1429,8 +1468,13 @@ mod tests {
             0,
         )
         .unwrap();
-        assert_eq!(transfer.tx_bytes, call.tx_bytes);
-        assert_eq!(transfer.tx_id, call.tx_id);
+        assert_ne!(
+            transfer.tx_bytes, call.tx_bytes,
+            "a transfer and a call carrying the same bytes must not be the same \
+             transaction; when they were, a call to an address that did not hold \
+             code yet executed as a transfer of its own arguments"
+        );
+        assert_ne!(transfer.tx_id, call.tx_id);
     }
 
     #[test]
@@ -1494,7 +1538,8 @@ mod tests {
         let sender = derive(&seed, 0);
         let target = account_address(&seed, 1);
         let call = Call::new(target.clone(), vec![9, 9, 9]);
-        let body = Body::with_context(sender.address(), 4, 1210, 750, call, 2500, LOCAL_CHAIN_ID);
+        let body = Body::with_context(sender.address(), 4, 1210, 750, call, 2500, LOCAL_CHAIN_ID)
+            .calling();
         let wrapper = sign(&sender, &body);
         assert!(qtv_tx::verify(&wrapper, sender.public_key()));
         let signed = sign_payable_call(
