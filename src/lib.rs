@@ -22,8 +22,10 @@ pub const SEED_LEN: usize = 32;
 
 pub const MAX_PLAUSIBLE_HEAD: u64 = 1 << 40;
 
+#[cfg(feature = "client")]
 const HEAD_BLOCKS_PER_SEC: u64 = 4;
 
+#[cfg(feature = "client")]
 const HEAD_SLACK_SECS: u64 = 60;
 
 pub const ADDRESS_PAYLOAD_LEN: usize = 32;
@@ -326,6 +328,7 @@ pub fn vm_call_fee(transfer_fee: u128, meter_limit: u64) -> u128 {
     ))
 }
 
+#[cfg(feature = "client")]
 fn is_public_chain(name: &str) -> bool {
     name.starts_with("Q-test-net-") || name.starts_with("Q-main-net-")
 }
