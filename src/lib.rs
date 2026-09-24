@@ -571,6 +571,7 @@ mod client {
         pinned_chain: std::cell::RefCell<Option<String>>,
         head_floor: std::cell::Cell<Option<(u64, std::time::Instant)>>,
         next_nonces: std::cell::RefCell<std::collections::HashMap<String, u64>>,
+        signed_nonces: std::cell::RefCell<std::collections::HashMap<String, u64>>,
     }
 
     fn fresh(base: String, network: Network, acknowledge_mainnet: bool) -> Client {
@@ -581,6 +582,7 @@ mod client {
             pinned_chain: std::cell::RefCell::new(None),
             head_floor: std::cell::Cell::new(None),
             next_nonces: std::cell::RefCell::new(std::collections::HashMap::new()),
+            signed_nonces: std::cell::RefCell::new(std::collections::HashMap::new()),
         }
     }
 
@@ -754,7 +756,9 @@ mod client {
 
         fn checked_nonce(&self, sender: &str, expected: Option<u64>) -> Result<u64, String> {
             let account = self.account(sender)?;
-            self.expected_slot(sender, account.nonce, expected)
+            let slot = self.expected_slot(sender, account.nonce, expected)?;
+            self.remember_signed(sender, slot);
+            Ok(slot)
         }
 
         fn expected_slot(
@@ -764,14 +768,29 @@ mod client {
             expected: Option<u64>,
         ) -> Result<u64, String> {
             let local = self.next_nonces.borrow().get(key).copied();
-            match (expected, local) {
-                (Some(exp), _) | (None, Some(exp)) if reported > exp => Err(format!(
-                    "the gateway reported nonce {reported} above the expected {exp}; refusing so a \
-                     signature cannot be banked for a nonce the account has not reached"
-                )),
-                (Some(exp), _) => Ok(exp),
-                (None, _) => Ok(reported),
+            let slot = match (expected, local) {
+                (Some(exp), _) | (None, Some(exp)) if reported > exp => {
+                    return Err(format!(
+                        "the gateway reported nonce {reported} above the expected {exp}; refusing so a \
+                         signature cannot be banked for a nonce the account has not reached"
+                    ))
+                }
+                (Some(exp), _) => exp,
+                (None, _) => reported,
+            };
+            if expected.is_none() && self.signed_nonces.borrow().get(key) == Some(&slot) {
+                return Err(format!(
+                    "a transaction was already signed for nonce {slot} in this session; if it was \
+                     never broadcast, pass that nonce explicitly to sign at it again"
+                ));
             }
+            Ok(slot)
+        }
+
+        fn remember_signed(&self, key: &str, used: u64) {
+            self.signed_nonces
+                .borrow_mut()
+                .insert(key.to_string(), used);
         }
 
         fn remember_used(&self, key: &str, used: u64, outcome: &Submit) {

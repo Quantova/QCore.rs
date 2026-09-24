@@ -167,6 +167,7 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
     let expected = qcore::sign_transfer(&seed, 0, &to, 1000, 0, 500, chain_id, until).unwrap();
     assert_eq!(signed.tx_bytes, expected.tx_bytes);
 
+    let client = Client::new(format!("http://127.0.0.1:{port}"));
     let (signed, _) = client
         .call(&seed, 0, &to, vec![1, 2], 21_000, call_fee)
         .unwrap();
@@ -184,6 +185,7 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
     .unwrap();
     assert_eq!(signed.tx_bytes, expected.tx_bytes);
 
+    let client = Client::new(format!("http://127.0.0.1:{port}"));
     let (signed, _) = client.register(&seed, 0, 1000).unwrap();
     let expected = qcore::sign_register(&seed, 0, 0, 500, chain_id, until).unwrap();
     assert_eq!(signed.tx_bytes, expected.tx_bytes);
