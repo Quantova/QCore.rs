@@ -425,7 +425,7 @@ fn word_list() -> Vec<&'static str> {
     include_str!("english.txt").lines().collect()
 }
 
-pub fn mnemonic_from_seed(seed: &[u8; SEED_LEN]) -> String {
+pub fn mnemonic_from_seed(seed: &[u8; SEED_LEN]) -> Zeroizing<String> {
     let words = word_list();
     let checksum = qtv_crypto::sha3::sha3_256(seed)[0];
     let mut bits: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::with_capacity(SEED_LEN * 8 + 8));
@@ -447,7 +447,7 @@ pub fn mnemonic_from_seed(seed: &[u8; SEED_LEN]) -> String {
         }
         phrase.push_str(words[index]);
     }
-    phrase
+    Zeroizing::new(phrase)
 }
 
 pub fn seed_from_mnemonic(phrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>, String> {
@@ -571,7 +571,8 @@ mod client {
         pinned_chain: std::cell::RefCell<Option<String>>,
         head_floor: std::cell::Cell<Option<(u64, std::time::Instant)>>,
         next_nonces: std::cell::RefCell<std::collections::HashMap<String, u64>>,
-        signed_nonces: std::cell::RefCell<std::collections::HashMap<String, u64>>,
+        signed_nonces:
+            std::cell::RefCell<std::collections::HashMap<String, std::collections::BTreeSet<u64>>>,
     }
 
     fn fresh(base: String, network: Network, acknowledge_mainnet: bool) -> Client {
@@ -778,7 +779,13 @@ mod client {
                 (Some(exp), _) => exp,
                 (None, _) => reported,
             };
-            if expected.is_none() && self.signed_nonces.borrow().get(key) == Some(&slot) {
+            if expected.is_none()
+                && self
+                    .signed_nonces
+                    .borrow()
+                    .get(key)
+                    .is_some_and(|held| held.contains(&slot))
+            {
                 return Err(format!(
                     "a transaction was already signed for nonce {slot} in this session; if it was \
                      never broadcast, pass that nonce explicitly to sign at it again"
@@ -790,7 +797,9 @@ mod client {
         fn remember_signed(&self, key: &str, used: u64) {
             self.signed_nonces
                 .borrow_mut()
-                .insert(key.to_string(), used);
+                .entry(key.to_string())
+                .or_default()
+                .insert(used);
         }
 
         fn remember_used(&self, key: &str, used: u64, outcome: &Submit) {
@@ -1450,6 +1459,17 @@ mod client {
                 "a submission that never lands leaves the chain at 4, and 4 is what it will admit"
             );
             assert!(client.expected_slot("a", 7, None).is_err());
+            client.remember_signed("a", 4);
+            client.remember_signed("a", 5);
+            assert!(
+                client.expected_slot("a", 4, None).is_err(),
+                "a slot already signed this session is not signed again unnamed"
+            );
+            assert_eq!(
+                client.expected_slot("a", 4, Some(4)).unwrap(),
+                4,
+                "naming the slot is how a caller says the first never landed"
+            );
             assert!(client.expected_slot("b", 9, Some(3)).is_err());
             assert_eq!(client.expected_slot("b", 2, Some(3)).unwrap(), 3);
         }
