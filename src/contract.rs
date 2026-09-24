@@ -470,6 +470,20 @@ pub fn build_call_args(selector: [u8; 4], args: &[FieldArg]) -> Result<Vec<u8>, 
     if mem_len > MAX_USER_MEMORY {
         return Err("the call arguments do not fit the contract memory".to_string());
     }
+    let mut spans: Vec<(u64, u64)> = args
+        .iter()
+        .map(|field| (field.offset, field.value.width()))
+        .collect();
+    spans.sort_by_key(|span| span.0);
+    for pair in spans.windows(2) {
+        let end = pair[0]
+            .0
+            .checked_add(pair[0].1)
+            .ok_or("an argument offset is too large")?;
+        if end > pair[1].0 {
+            return Err("two call arguments overlap in the argument memory".to_string());
+        }
+    }
     let mut user_memory = vec![0u8; mem_len];
     for field in args {
         put_bytes(&mut user_memory, field.offset, &field.value.bytes())?;
@@ -1290,6 +1304,118 @@ mod tests {
             order.signature.as_slice().try_into().unwrap(),
             &[],
         ));
+    }
+
+    #[test]
+    fn overlapping_call_arguments_are_refused_not_clobbered() {
+        let to = [0x44u8; 32];
+        let err = build_call_args(
+            MINT_SELECTOR,
+            &[
+                FieldArg {
+                    offset: 120,
+                    value: FieldValue::Address(to),
+                },
+                FieldArg {
+                    offset: 130,
+                    value: FieldValue::Word(7),
+                },
+            ],
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("overlap"),
+            "overlapping arguments must be refused, got {err}"
+        );
+
+        let ok = build_call_args(
+            MINT_SELECTOR,
+            &[
+                FieldArg {
+                    offset: 120,
+                    value: FieldValue::Address(to),
+                },
+                FieldArg {
+                    offset: 152,
+                    value: FieldValue::Word(7),
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(&ok[4 + 120..4 + 152], &to, "a laid out address survives");
+        assert_eq!(
+            word_at(&ok[4..], 152),
+            7,
+            "the word that sits after it survives too"
+        );
+    }
+
+    #[test]
+    fn the_signed_message_follows_the_listed_order_not_the_offsets() {
+        let seed = [9u8; crate::SEED_LEN];
+        let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
+        let to = [0x44u8; 32];
+
+        let build = |fields: &[FieldArg]| {
+            build_typed_order_call(
+                TEST_CHAIN,
+                &contract,
+                MINT_SELECTOR,
+                120,
+                128,
+                DEFAULT_REGION_OFFSET,
+                fields,
+                &seed,
+                0,
+                0,
+            )
+            .unwrap()
+        };
+
+        let here = build(&[
+            FieldArg {
+                offset: 168,
+                value: FieldValue::Word(500),
+            },
+            FieldArg {
+                offset: 136,
+                value: FieldValue::Address(to),
+            },
+        ]);
+        let elsewhere = build(&[
+            FieldArg {
+                offset: 232,
+                value: FieldValue::Word(500),
+            },
+            FieldArg {
+                offset: 200,
+                value: FieldValue::Address(to),
+            },
+        ]);
+
+        assert_eq!(
+            here.message, elsewhere.message,
+            "the message is built from the listed values, not from where they sit"
+        );
+        assert_ne!(
+            here.user_memory, elsewhere.user_memory,
+            "the placement differs even though the signed message does not"
+        );
+
+        let swapped_order = build(&[
+            FieldArg {
+                offset: 136,
+                value: FieldValue::Address(to),
+            },
+            FieldArg {
+                offset: 168,
+                value: FieldValue::Word(500),
+            },
+        ]);
+        assert_ne!(
+            here.message, swapped_order.message,
+            "listing the same fields in another order signs another preimage"
+        );
     }
 
     #[test]
