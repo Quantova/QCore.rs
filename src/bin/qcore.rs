@@ -152,9 +152,14 @@ fn cmd_status(args: &[String]) -> Result<(), String> {
         .get(1)
         .ok_or("usage: qcore status <gateway-url> <tx-id>")?;
     match Client::new(gateway.clone()).transaction(tx_id)? {
-        TxStatus::Finalised { height, block } => {
-            println!("finalised at height {height} in block {block}")
-        }
+        TxStatus::Finalised {
+            height,
+            block: Some(block),
+        } => println!("finalised at height {height} in block {block}"),
+        TxStatus::Finalised {
+            height,
+            block: None,
+        } => println!("finalised at height {height}"),
         TxStatus::Pending => println!("pending"),
         TxStatus::Unknown => println!("unknown"),
     }

@@ -138,19 +138,22 @@ fn transfer_at_or_below_the_ceiling_signs_and_submits() {
 }
 
 #[test]
-fn a_gateway_nonce_below_the_expected_one_signs_at_the_expected_one() {
-    let (port, _) = spawn_gateway(1000);
+fn an_expected_nonce_the_gateway_has_not_reached_is_refused() {
+    let (port, submits) = spawn_gateway(1000);
     let client = Client::new(format!("http://127.0.0.1:{port}"));
     let seed = [11u8; 32];
     let to = account_address(&seed, 1);
-    let chain_id = qcore::chain_id_from_name("Q-dev-net-1");
-    let until = 10 + qcore::DEFAULT_VALIDITY_BLOCKS;
 
-    let (signed, _) = client
+    let err = client
         .transfer_expecting(&seed, 0, &to, 1000, 1000, Some(5))
-        .expect("an expected nonce ahead of the gateway is a pending slot");
-    let at_five = qcore::sign_transfer(&seed, 0, &to, 1000, 5, 1000, chain_id, until).unwrap();
-    assert_eq!(signed.tx_bytes, at_five.tx_bytes);
+        .expect_err("the mempool admits only the nonce the account has reached");
+    assert!(err.contains("you expected 5"), "unexpected error: {err}");
+    assert_eq!(submits.load(Ordering::SeqCst), 0);
+    let (_signed, outcome) = client
+        .transfer_expecting(&seed, 0, &to, 1000, 1000, Some(0))
+        .expect("the reported nonce signs");
+    assert!(matches!(outcome, Submit::Accepted { .. }));
+    assert_eq!(submits.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -181,6 +184,7 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
         call_fee,
         chain_id,
         until,
+        500,
     )
     .unwrap();
     assert_eq!(signed.tx_bytes, expected.tx_bytes);
@@ -190,11 +194,86 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
     let expected = qcore::sign_register(&seed, 0, 0, 500, chain_id, until).unwrap();
     assert_eq!(signed.tx_bytes, expected.tx_bytes);
 
-    let unbounded = qcore::sign_register(&seed, 0, 0, 500, chain_id, 0).unwrap();
+    assert!(
+        qcore::sign_register(&seed, 0, 0, 500, chain_id, 0).is_err(),
+        "a deadline that never expires is refused"
+    );
+    let later = qcore::sign_register(&seed, 0, 0, 500, chain_id, until + 1).unwrap();
     assert_ne!(
-        signed.tx_bytes, unbounded.tx_bytes,
+        signed.tx_bytes, later.tx_bytes,
         "the window is signed, not implied"
     );
+}
+
+#[test]
+fn a_rejected_submission_releases_its_nonce_for_the_next_send() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().unwrap().port();
+    let submits = Arc::new(AtomicUsize::new(0));
+    let submits_for_thread = submits.clone();
+    thread::spawn(move || {
+        for conn in listener.incoming() {
+            let mut stream = match conn {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let request = read_request(&mut stream);
+            let path = request
+                .lines()
+                .next()
+                .unwrap_or("")
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or("");
+            let body = match path {
+                "/v1/node_info" => "{\"chain_id\":\"Q-dev-net-1\",\"genesis_hash\":\"Qgen\",\
+                     \"head_height\":10,\"denomination\":\"Quon\",\
+                     \"fee\":{\"transfer_quon\":\"500\"},\"version\":\"test\"}"
+                    .to_string(),
+                "/v1/get_account" => {
+                    let addr = request
+                        .rsplit_once("\"address\":\"")
+                        .and_then(|(_, rest)| rest.split('"').next())
+                        .unwrap_or("Q1acct")
+                        .to_string();
+                    format!(
+                        "{{\"address\":\"{addr}\",\"nonce\":0,\"balance\":\"0\",\
+                         \"scheme\":1,\"has_key\":true}}"
+                    )
+                }
+                "/v1/submit_transaction" => {
+                    if submits_for_thread.fetch_add(1, Ordering::SeqCst) == 0 {
+                        "{\"verdict\":\"rejected\",\"reason\":\"insufficient_funds\"}".to_string()
+                    } else {
+                        "{\"verdict\":\"accepted\",\"state\":\"fresh\",\"tx_id\":\"Qtxabc\"}"
+                            .to_string()
+                    }
+                }
+                _ => "{\"error\":\"unknown_method\",\"message\":\"x\"}".to_string(),
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                 Connection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+    let client = Client::new(format!("http://127.0.0.1:{port}"));
+    let seed = [11u8; 32];
+    let to = account_address(&seed, 1);
+    let (_signed, first) = client.transfer(&seed, 0, &to, 1000, 1000).unwrap();
+    assert!(matches!(first, Submit::Rejected { .. }));
+    let (_signed, second) = client
+        .transfer(&seed, 0, &to, 2000, 1000)
+        .expect("a rejected send must not block the next one at the same nonce");
+    assert!(matches!(second, Submit::Accepted { .. }));
+    let err = client
+        .transfer(&seed, 0, &to, 3000, 1000)
+        .expect_err("an accepted send still holds its nonce");
+    assert!(err.contains("already signed"), "unexpected error: {err}");
+    assert_eq!(submits.load(Ordering::SeqCst), 2);
 }
 
 #[test]

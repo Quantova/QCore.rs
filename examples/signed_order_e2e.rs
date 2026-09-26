@@ -39,7 +39,7 @@ fn run() -> Result<(), String> {
     let layout = OrderLayout::new(88, 96, vec![104]);
 
     let info = client.node_info()?;
-    let fee = info.transfer_fee;
+    let fee = qcore::vm_call_fee(info.transfer_fee, METER);
     println!(
         "network {} at height {}, fee {} {}",
         info.chain_id, info.head_height, fee, info.denomination
@@ -189,7 +189,8 @@ fn run() -> Result<(), String> {
         METER,
         fee,
         qcore::chain_id_from_name(&info.chain_id),
-        0,
+        qcore::valid_until_from(&client.node_info()?),
+        info.transfer_fee,
     )?;
     let replay_out = client.submit(&replay.tx_bytes)?;
     accepted(&replay_out, "replay")?;

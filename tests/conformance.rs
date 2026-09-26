@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use qcore::json::{self, Json};
-use qcore::{account_address, sign_payable_call, LOCAL_CHAIN_ID, SEED_LEN};
+use qcore::{account_address, sign_payable_call, LOCAL_CHAIN_ID, NATIVE_TRANSFER_METER, SEED_LEN};
+use qtv_tx::{sign, Body, Call};
 
 const VECTORS: &str = include_str!("vectors.json");
 
@@ -73,6 +74,46 @@ fn the_frozen_vectors_reproduce_from_the_signing_core() {
             "{name} sender renders uppercase Q1"
         );
 
+        let sender = qtv_account::derive(&seed, index);
+        let chain_body = |valid_until: u64| {
+            Body::with_context(
+                sender.address(),
+                nonce,
+                meter_limit,
+                fee,
+                Call::new(target.clone(), args.clone()),
+                value,
+                chain_id,
+            )
+            .calling()
+            .valid_until(valid_until)
+        };
+        let frozen = sign(&sender, &chain_body(0));
+        assert_eq!(frozen.id(), text(v, "tx_id"), "{name} transaction id");
+        assert_eq!(
+            hex(&qtv_codec::to_bytes(&frozen)),
+            text(v, "tx_bytes"),
+            "{name} signed bytes"
+        );
+
+        let transfer_fee = fee / u128::from(meter_limit.div_ceil(NATIVE_TRANSFER_METER).max(1));
+        assert!(
+            sign_payable_call(
+                &seed,
+                index,
+                &target,
+                args.clone(),
+                value,
+                nonce,
+                meter_limit,
+                fee,
+                chain_id,
+                0,
+                transfer_fee,
+            )
+            .is_err(),
+            "{name} the core refuses the never expiring deadline the frozen vector was signed at"
+        );
         let signed = sign_payable_call(
             &seed,
             index,
@@ -83,15 +124,17 @@ fn the_frozen_vectors_reproduce_from_the_signing_core() {
             meter_limit,
             fee,
             chain_id,
-            0,
+            300,
+            transfer_fee,
         )
         .unwrap();
+        let bounded = sign(&sender, &chain_body(300));
         assert_eq!(signed.from, text(v, "from"), "{name} from");
-        assert_eq!(signed.tx_id, text(v, "tx_id"), "{name} transaction id");
+        assert_eq!(signed.tx_id, bounded.id(), "{name} bounded transaction id");
         assert_eq!(
-            hex(&signed.tx_bytes),
-            text(v, "tx_bytes"),
-            "{name} signed bytes"
+            signed.tx_bytes,
+            qtv_codec::to_bytes(&bounded),
+            "{name} the core signs the chain body byte for byte"
         );
 
         let lowered = target.to_ascii_lowercase();
@@ -105,7 +148,8 @@ fn the_frozen_vectors_reproduce_from_the_signing_core() {
             meter_limit,
             fee,
             chain_id,
-            0,
+            300,
+            transfer_fee,
         )
         .unwrap();
         assert_eq!(

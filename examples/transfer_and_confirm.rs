@@ -43,7 +43,10 @@ fn main() {
     for _ in 0..40 {
         match client.transaction(&signed.tx_id).expect("status") {
             TxStatus::Finalised { height, block } => {
-                println!("finalised at height {height} in block {block}");
+                match block {
+                    Some(block) => println!("finalised at height {height} in block {block}"),
+                    None => println!("finalised at height {height}"),
+                }
                 break;
             }
             TxStatus::Pending => sleep(Duration::from_millis(250)),

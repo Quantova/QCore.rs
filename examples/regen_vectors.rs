@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use qcore::json::{self, Json};
-use qcore::{account_address, sign_payable_call, SEED_LEN};
+use qcore::{account_address, SEED_LEN};
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -29,25 +29,31 @@ fn main() {
             .try_into()
             .expect("seed");
         let index = number(v, "index");
-        let signed = sign_payable_call(
-            &seed,
-            index,
-            &text(v, "target"),
-            json::from_hex(&text(v, "args")).expect("hex"),
-            number(v, "value"),
+        let sender = qtv_account::derive(&seed, index);
+        let body = qtv_tx::Body::with_context(
+            sender.address(),
             number(v, "nonce"),
             number(v, "meter_limit"),
             text(v, "fee").parse().expect("fee"),
+            qtv_tx::Call::new(
+                text(v, "target"),
+                json::from_hex(&text(v, "args")).expect("hex"),
+            ),
+            number(v, "value"),
             text(v, "chain_id").parse().expect("chain id"),
-            0,
         )
-        .expect("sign");
+        .calling();
+        let signed = qtv_tx::sign(&sender, &body);
         println!(
             "{}\tfrom\t{}",
             text(v, "name"),
             account_address(&seed, index)
         );
-        println!("{}\ttx_id\t{}", text(v, "name"), signed.tx_id);
-        println!("{}\ttx_bytes\t{}", text(v, "name"), hex(&signed.tx_bytes));
+        println!("{}\ttx_id\t{}", text(v, "name"), signed.id());
+        println!(
+            "{}\ttx_bytes\t{}",
+            text(v, "name"),
+            hex(&qtv_codec::to_bytes(&signed))
+        );
     }
 }

@@ -77,7 +77,7 @@ fn run() -> Result<(), String> {
 
     let client = Client::new(url);
     let info = client.node_info()?;
-    let fee = info.transfer_fee;
+    let fee = qcore::vm_call_fee(info.transfer_fee, METER);
     println!(
         "network {} at height {}, fee {} {}",
         info.chain_id, info.head_height, fee, info.denomination

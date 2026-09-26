@@ -58,7 +58,7 @@ fn run() -> Result<(), String> {
 
     let client = Client::new(url);
     let info = client.node_info()?;
-    let fee = info.transfer_fee;
+    let fee = qcore::vm_call_fee(info.transfer_fee, METER);
     println!(
         "network {} at height {}, fee {} {}",
         info.chain_id, info.head_height, fee, info.denomination
@@ -296,7 +296,8 @@ fn run() -> Result<(), String> {
         METER,
         fee,
         qcore::chain_id_from_name(&info.chain_id),
-        0,
+        qcore::valid_until_from(&client.node_info()?),
+        info.transfer_fee,
     )?;
     accepted(&client.submit(&replay.tx_bytes)?, "replay")?;
     let replay_height = poll_finality(&client, &replay.tx_id)?;

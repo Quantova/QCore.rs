@@ -15,18 +15,7 @@ fn main() {
     println!("sender {sender}");
     println!("target {target}");
 
-    let transfer = qcore::sign_call(
-        &seed,
-        7,
-        &target,
-        vec![0xde, 0xad, 0xbe, 0xef],
-        3,
-        21_000,
-        1_000_000,
-        qtv_tx::LOCAL_CHAIN_ID,
-        0,
-    )
-    .expect("sign_call");
+    let account = qtv_account::derive(&seed, 7);
     let body = qtv_tx::Body::with_context(
         sender.clone(),
         3,
@@ -37,11 +26,40 @@ fn main() {
         qtv_tx::LOCAL_CHAIN_ID,
     )
     .calling();
+    let transfer = qtv_tx::sign(&account, &body);
     println!("transfer.body_bytes {}", hex(&qtv_codec::to_bytes(&body)));
-    println!("transfer.tx_id {}", transfer.tx_id);
-    println!("transfer.tx_hex {}", hex(&transfer.tx_bytes));
+    println!("transfer.tx_id {}", transfer.id());
+    println!("transfer.tx_hex {}", hex(&qtv_codec::to_bytes(&transfer)));
+    let bounded = qcore::sign_call(
+        &seed,
+        7,
+        &target,
+        vec![0xde, 0xad, 0xbe, 0xef],
+        3,
+        21_000,
+        1_000_000,
+        qtv_tx::LOCAL_CHAIN_ID,
+        300,
+        500,
+    )
+    .expect("sign_call");
+    println!("transfer.bounded.tx_id {}", bounded.tx_id);
+    println!("transfer.bounded.tx_hex {}", hex(&bounded.tx_bytes));
 
-    let payable = qcore::sign_payable_call(
+    let payable_body = qtv_tx::Body::with_context(
+        sender.clone(),
+        3,
+        21_000,
+        1_000_000,
+        qtv_tx::Call::new(target.clone(), vec![0xde, 0xad, 0xbe, 0xef]),
+        250_000,
+        4_032_652_574_364_075_694,
+    )
+    .calling();
+    let payable = qtv_tx::sign(&account, &payable_body);
+    println!("payable.tx_id {}", payable.id());
+    println!("payable.tx_hex {}", hex(&qtv_codec::to_bytes(&payable)));
+    let bounded = qcore::sign_payable_call(
         &seed,
         7,
         &target,
@@ -51,9 +69,10 @@ fn main() {
         21_000,
         1_000_000,
         4_032_652_574_364_075_694,
-        0,
+        300,
+        500,
     )
     .expect("sign_payable_call");
-    println!("payable.tx_id {}", payable.tx_id);
-    println!("payable.tx_hex {}", hex(&payable.tx_bytes));
+    println!("payable.bounded.tx_id {}", bounded.tx_id);
+    println!("payable.bounded.tx_hex {}", hex(&bounded.tx_bytes));
 }
