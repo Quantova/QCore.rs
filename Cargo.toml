@@ -25,7 +25,7 @@ qtv-account = { path = "../Quantova-Chain/crates/qtv-account" }
 qtv-tx = { path = "../Quantova-Chain/crates/qtv-tx" }
 qtv-codec = { path = "../Quantova-Chain/crates/qtv-codec" }
 qtv-idfmt = { path = "../Quantova-Chain/crates/qtv-idfmt" }
-qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "e6652598dc3847189609a282128921824d55c10b" }
+qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "387c01dee92bd3a7e5a6bf5a1480745ccafa0d5f" }
 qtv-wipe = { path = "../Quantova-Chain/crates/qtv-wipe" }
 qtv-vm = { path = "../QVM/crates/qtv-vm" }
 
