@@ -3,7 +3,7 @@
 
 [package]
 name = "qcore"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 license = "Apache-2.0 OR MIT"
 description = "The Quantova post quantum client core in Rust. One implementation of key derivation, transaction building, quantum safe signing with the ML-DSA-65 module lattice scheme, and the Quantova gateway wire, that the JavaScript and Python bindings are generated over so no client ever hand rolls a signature or the wire."
