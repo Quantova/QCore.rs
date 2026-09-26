@@ -115,7 +115,7 @@ fn a_testnet_network_carries_its_identifiers() {
     let testnet = Network::testnet();
     assert_eq!(
         testnet.chain_id.as_deref(),
-        Some("Q-test-net-3"),
+        Some("Q-test-net-1"),
         "testnet chain id"
     );
     assert_eq!(
@@ -133,7 +133,7 @@ fn a_client_from_a_network_carries_that_network() {
     let client = Client::with_network("http://127.0.0.1:1", Network::testnet(), false);
     assert_eq!(
         client.network().chain_id.as_deref(),
-        Some("Q-test-net-3"),
+        Some("Q-test-net-1"),
         "the client carries its configured network"
     );
     assert!(
@@ -224,5 +224,36 @@ fn a_configured_network_refuses_a_mismatched_gateway_chain_id() {
         submits.load(Ordering::SeqCst),
         0,
         "a mismatched chain id must never reach submit"
+    );
+}
+
+#[test]
+fn a_zero_transfer_is_refused_and_a_lookalike_is_flagged() {
+    let seed = [21u8; 32];
+    let to = account_address(&seed, 1);
+    assert!(
+        qcore::sign_transfer(&seed, 0, &to, 0, 0, 500, qcore::testnet_chain_id(), 100).is_err()
+    );
+    let known = vec![to.clone()];
+    assert_eq!(
+        qcore::lookalike_of(&to, &known),
+        None,
+        "the same address is not a lookalike"
+    );
+    assert!(qcore::same_address(&to, &to.to_ascii_lowercase()));
+    let mut fake = None;
+    for i in 2..4_000_000u64 {
+        let payload = qtv_crypto::sha3::sha3_256(&i.to_le_bytes());
+        let candidate = qtv_idfmt::render_address(&payload).unwrap();
+        if candidate[2..4] == to[2..4] {
+            fake = Some(candidate);
+            break;
+        }
+    }
+    let partial = fake.expect("a two character prefix match is cheap to find");
+    assert_eq!(
+        qcore::lookalike_of(&partial, &known),
+        None,
+        "sharing only two leading characters is not flagged"
     );
 }

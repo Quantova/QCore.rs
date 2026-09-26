@@ -17,7 +17,7 @@ pub use qtv_tx::{
     chain_id_from_name, LOCAL_CHAIN_ID, LOCAL_CHAIN_NAME, MAINNET_CHAIN_ID, MAINNET_CHAIN_NAME,
 };
 
-pub const TESTNET_CHAIN_NAME: &str = "Q-test-net-3";
+pub const TESTNET_CHAIN_NAME: &str = "Q-test-net-1";
 
 pub const SEED_LEN: usize = 32;
 
@@ -355,6 +355,9 @@ pub fn sign_transfer(
     chain_id: u64,
     valid_until: u64,
 ) -> Result<SignedTransfer, String> {
+    if amount == 0 {
+        return Err("a transfer of zero is refused, the chain rejects it".to_string());
+    }
     let mut encoder = Encoder::new();
     encoder.put_u64(amount);
     sign_native(
@@ -499,6 +502,32 @@ fn field_u8(v: &Json, key: &str) -> Result<u8, String> {
 
 pub fn valid_address(address: &str) -> bool {
     matches!(qtv_idfmt::parse_address(address), Ok(payload) if payload.len() == ADDRESS_PAYLOAD_LEN)
+}
+
+pub const LOOKALIKE_EDGE: usize = 6;
+
+pub fn same_address(a: &str, b: &str) -> bool {
+    matches!((address_payload(a), address_payload(b)), (Ok(x), Ok(y)) if x == y)
+}
+
+fn shares_edges(a: &str, b: &str) -> bool {
+    let (a, b) = (a.to_ascii_uppercase(), b.to_ascii_uppercase());
+    let head = |t: &str| t.get(2..2 + LOOKALIKE_EDGE).map(str::to_string);
+    let tail = |t: &str| {
+        t.len()
+            .checked_sub(LOOKALIKE_EDGE)
+            .and_then(|i| t.get(i..))
+            .map(str::to_string)
+    };
+    head(&a).is_some() && head(&a) == head(&b) && tail(&a) == tail(&b)
+}
+
+pub fn lookalike_of(candidate: &str, known: &[String]) -> Option<String> {
+    let target = address_payload(candidate).ok()?;
+    known.iter().find_map(|other| {
+        let payload = address_payload(other).ok()?;
+        (payload != target && shares_edges(candidate, other)).then(|| other.clone())
+    })
 }
 
 pub fn address_payload(address: &str) -> Result<[u8; 32], String> {
@@ -1659,7 +1688,7 @@ mod client {
         #[test]
         fn an_unnamed_client_refuses_a_public_chain_and_pins_the_first_private_one() {
             let client = Client::new("http://127.0.0.1:1");
-            assert!(client.signing_chain_id(&info("Q-test-net-3", 1)).is_err());
+            assert!(client.signing_chain_id(&info("Q-test-net-1", 1)).is_err());
             assert!(client.signing_chain_id(&info("Q-main-net-1", 1)).is_err());
             assert!(client.signing_chain_id(&info("Q-dev-net-7", 1)).is_ok());
             assert!(client.signing_chain_id(&info("Q-dev-net-8", 1)).is_err());
@@ -1989,11 +2018,30 @@ mod tests {
     }
 
     #[test]
+    fn lookalike_edges_compare_the_first_and_last_six_characters() {
+        let a = "Q1ABCDEF0000000000000000000000000000000000000000000000UVWXYZ";
+        assert!(shares_edges(
+            a,
+            "Q1ABCDEF1111111111111111111111111111111111111111111111UVWXYZ"
+        ));
+        assert!(shares_edges(a, &a.to_ascii_lowercase()));
+        assert!(!shares_edges(
+            a,
+            "Q1ABCDEX0000000000000000000000000000000000000000000000UVWXYZ"
+        ));
+        assert!(!shares_edges(
+            a,
+            "Q1ABCDEF0000000000000000000000000000000000000000000000UVWXYQ"
+        ));
+        assert!(!shares_edges("Q1", "Q1"));
+    }
+
+    #[test]
     fn the_testnet_chain_id_follows_the_testnet_network() {
         let configured = Network::testnet().chain_id.unwrap();
-        assert_eq!(configured, "Q-test-net-3");
+        assert_eq!(configured, "Q-test-net-1");
         assert_eq!(testnet_chain_id(), chain_id_from_name(&configured));
-        assert_ne!(testnet_chain_id(), qtv_tx::TESTNET_CHAIN_ID);
+        assert_eq!(testnet_chain_id(), qtv_tx::TESTNET_CHAIN_ID);
     }
 
     #[test]
@@ -2483,7 +2531,7 @@ mod tests {
             "a url client with no chosen network must refuse a mainnet reporting gateway"
         );
         assert!(
-            client.signing_chain_id(&info("Q-test-net-3")).is_err(),
+            client.signing_chain_id(&info("Q-test-net-1")).is_err(),
             "a url client must be configured before it signs for the public testnet"
         );
         assert!(
