@@ -35,6 +35,8 @@ pub const NATIVE_TRANSFER_METER: u64 = 1_210;
 
 pub const MAX_METER_LIMIT: u64 = 12_500_000;
 
+pub const MAX_DEPLOY_METER_LIMIT: u64 = 50_000_000;
+
 pub const MAX_CALL_ARGS: usize = 128 * 1024;
 
 pub const MAX_VALIDITY_BLOCKS: u64 = 3_600;
@@ -147,7 +149,7 @@ pub fn sign_payable_call(
     valid_until: u64,
     transfer_fee: u128,
 ) -> Result<SignedTransfer, String> {
-    check_call(meter_limit, args.len(), fee, transfer_fee)?;
+    check_call_to(target, meter_limit, args.len(), fee, transfer_fee)?;
     sign_native(
         seed,
         index,
@@ -169,9 +171,34 @@ pub fn check_call(
     fee: u128,
     transfer_fee: u128,
 ) -> Result<(), String> {
-    if !(NATIVE_TRANSFER_METER..=MAX_METER_LIMIT).contains(&meter_limit) {
+    check_call_under(MAX_METER_LIMIT, meter_limit, args_len, fee, transfer_fee)
+}
+
+pub fn check_call_to(
+    target: &str,
+    meter_limit: u64,
+    args_len: usize,
+    fee: u128,
+    transfer_fee: u128,
+) -> Result<(), String> {
+    let ceiling = if target == vm_deploy_address() {
+        MAX_DEPLOY_METER_LIMIT
+    } else {
+        MAX_METER_LIMIT
+    };
+    check_call_under(ceiling, meter_limit, args_len, fee, transfer_fee)
+}
+
+fn check_call_under(
+    ceiling: u64,
+    meter_limit: u64,
+    args_len: usize,
+    fee: u128,
+    transfer_fee: u128,
+) -> Result<(), String> {
+    if !(NATIVE_TRANSFER_METER..=ceiling).contains(&meter_limit) {
         return Err(format!(
-            "the meter limit {meter_limit} is outside the range {NATIVE_TRANSFER_METER} to {MAX_METER_LIMIT} the chain admits, refusing to sign"
+            "the meter limit {meter_limit} is outside the range {NATIVE_TRANSFER_METER} to {ceiling} the chain admits, refusing to sign"
         ));
     }
     if args_len > MAX_CALL_ARGS {
@@ -1927,6 +1954,24 @@ mod tests {
             vm_call_fee(500, MAX_METER_LIMIT + 1)
         )
         .is_err());
+        let deploy = |meter: u64| {
+            sign_call(
+                &seed,
+                0,
+                &vm_deploy_address(),
+                vec![1],
+                0,
+                meter,
+                vm_call_fee(500, meter),
+                LOCAL_CHAIN_ID,
+                300,
+                500,
+            )
+        };
+        assert!(deploy(MAX_METER_LIMIT + 1).is_ok());
+        assert!(deploy(MAX_DEPLOY_METER_LIMIT).is_ok());
+        assert!(deploy(MAX_DEPLOY_METER_LIMIT + 1).is_err());
+        assert_eq!(MAX_DEPLOY_METER_LIMIT, 50_000_000);
         assert!(call(vec![0; MAX_CALL_ARGS], 21_000, vm_call_fee(500, 21_000)).is_ok());
         assert!(call(vec![0; MAX_CALL_ARGS + 1], 21_000, vm_call_fee(500, 21_000)).is_err());
         let underpriced = call(vec![1], 21_000, 500).unwrap_err();
