@@ -1086,11 +1086,7 @@ mod client {
                     let local = next.entry(key.to_string()).or_insert(0);
                     *local = (*local).max(used.saturating_add(1));
                 }
-                Submit::Rejected { .. } => {
-                    if let Some(held) = self.signed_nonces.borrow_mut().get_mut(key) {
-                        held.remove(&used);
-                    }
-                }
+                Submit::Rejected { .. } => {}
             }
         }
 
@@ -1807,7 +1803,7 @@ mod client {
         }
 
         #[test]
-        fn a_signed_nonce_is_held_until_it_is_rejected_or_expires() {
+        fn a_signed_nonce_is_held_until_it_expires_or_is_explicitly_replaced() {
             let client = Client::new("http://127.0.0.1:1");
             client.remember_signed("a", 4, 310);
             assert!(
@@ -1820,10 +1816,14 @@ mod client {
                 "naming the slot is how a caller says the first never landed"
             );
             client.remember_used("a", 4, &rejected());
+            assert!(
+                client.expected_slot("a", 4, None, 10).is_err(),
+                "a gateway-asserted rejection does not free a signed slot"
+            );
             assert_eq!(
-                client.expected_slot("a", 4, None, 10).unwrap(),
+                client.expected_slot("a", 4, Some(4), 10).unwrap(),
                 4,
-                "a rejected submission frees its slot"
+                "the caller still replaces an unlanded slot by naming it"
             );
             client.remember_signed("a", 4, 310);
             assert!(

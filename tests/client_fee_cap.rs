@@ -206,7 +206,7 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
 }
 
 #[test]
-fn a_rejected_submission_releases_its_nonce_for_the_next_send() {
+fn a_rejected_submission_does_not_free_a_signed_nonce_without_explicit_replacement() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let port = listener.local_addr().unwrap().port();
     let submits = Arc::new(AtomicUsize::new(0));
@@ -265,9 +265,13 @@ fn a_rejected_submission_releases_its_nonce_for_the_next_send() {
     let to = account_address(&seed, 1);
     let (_signed, first) = client.transfer(&seed, 0, &to, 1000, 1000).unwrap();
     assert!(matches!(first, Submit::Rejected { .. }));
-    let (_signed, second) = client
+    let blocked = client
         .transfer(&seed, 0, &to, 2000, 1000)
-        .expect("a rejected send must not block the next one at the same nonce");
+        .expect_err("a gateway-asserted rejection must not free a signed nonce on its own");
+    assert!(blocked.contains("already signed"), "unexpected error: {blocked}");
+    let (_signed, second) = client
+        .transfer_expecting(&seed, 0, &to, 2000, 1000, Some(0))
+        .expect("naming the nonce replaces one the caller knows never landed");
     assert!(matches!(second, Submit::Accepted { .. }));
     let err = client
         .transfer(&seed, 0, &to, 3000, 1000)
