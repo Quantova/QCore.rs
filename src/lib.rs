@@ -28,6 +28,7 @@ const HEAD_BLOCKS_PER_SEC: u64 = 4;
 
 #[cfg(feature = "client")]
 const HEAD_SLACK_SECS: u64 = 60;
+const GENESIS_FLOOR_SECS: u64 = 1_735_689_600;
 
 pub const ADDRESS_PAYLOAD_LEN: usize = 32;
 
@@ -1096,6 +1097,19 @@ mod client {
                 return Err(format!(
                     "the gateway reports head {head}, past any height this chain can have reached, refusing to sign"
                 ));
+            }
+            if let Ok(wall) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                let secs = wall.as_secs();
+                if secs > GENESIS_FLOOR_SECS {
+                    let max_head = (secs - GENESIS_FLOOR_SECS)
+                        .saturating_add(HEAD_SLACK_SECS)
+                        .saturating_mul(HEAD_BLOCKS_PER_SEC);
+                    if head > max_head {
+                        return Err(format!(
+                            "the gateway reports head {head} further ahead than wall-clock time allows, refusing to sign"
+                        ));
+                    }
+                }
             }
             let now = std::time::Instant::now();
             if let Some((floor, at)) = self.head_floor.get() {
