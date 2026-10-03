@@ -341,6 +341,9 @@ pub fn sign_asset_call(
     if !valid_address(target) {
         return Err("the target is not a Q1 address".to_string());
     }
+    if amount == 0 {
+        return Err("an asset transfer of zero is refused, the chain rejects it".to_string());
+    }
     let issuer = qtv_idfmt::parse_address(asset_issuer)
         .map_err(|_| "the asset issuer is not a Q1 address".to_string())?;
     if issuer.len() != 32 {
