@@ -236,8 +236,7 @@ fn read_seed(source: &str) -> Result<Zeroizing<[u8; 32]>, String> {
     let hex: Zeroizing<String> = Zeroizing::new(if let Some(var) = source.strip_prefix("env:") {
         std::env::var(var).map_err(|_| format!("the environment variable {var} is not set"))?
     } else if let Some(path) = source.strip_prefix('@') {
-        refuse_shared_seed_file(path)?;
-        std::fs::read_to_string(path).map_err(|e| format!("reading the seed file {path}: {e}"))?
+        read_seed_file(path)?
     } else if source == "-" {
         let mut line = String::new();
         std::io::stdin()
@@ -254,20 +253,26 @@ fn read_seed(source: &str) -> Result<Zeroizing<[u8; 32]>, String> {
     parse_seed(hex.trim())
 }
 
-fn refuse_shared_seed_file(path: &str) -> Result<(), String> {
+fn read_seed_file(path: &str) -> Result<String, String> {
+    use std::io::Read;
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("opening the seed file {path}: {e}"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(path) {
-            if meta.permissions().mode() & 0o077 != 0 {
-                return Err(format!(
-                    "the seed file {path} is readable by group or others, restrict it with chmod 600 before use"
-                ));
-            }
+        let meta = file
+            .metadata()
+            .map_err(|e| format!("inspecting the seed file {path}: {e}"))?;
+        if meta.permissions().mode() & 0o077 != 0 {
+            return Err(format!(
+                "the seed file {path} is readable by group or others, restrict it with chmod 600 before use"
+            ));
         }
     }
-    let _ = path;
-    Ok(())
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)
+        .map_err(|e| format!("reading the seed file {path}: {e}"))?;
+    Ok(contents)
 }
 
 fn parse_seed(hex: &str) -> Result<Zeroizing<[u8; 32]>, String> {

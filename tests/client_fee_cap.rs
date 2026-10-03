@@ -268,7 +268,10 @@ fn a_rejected_submission_does_not_free_a_signed_nonce_without_explicit_replaceme
     let blocked = client
         .transfer(&seed, 0, &to, 2000, 1000)
         .expect_err("a gateway-asserted rejection must not free a signed nonce on its own");
-    assert!(blocked.contains("already signed"), "unexpected error: {blocked}");
+    assert!(
+        blocked.contains("already signed"),
+        "unexpected error: {blocked}"
+    );
     let (_signed, second) = client
         .transfer_expecting(&seed, 0, &to, 2000, 1000, Some(0))
         .expect("naming the nonce replaces one the caller knows never landed");
