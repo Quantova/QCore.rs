@@ -28,6 +28,7 @@ const HEAD_BLOCKS_PER_SEC: u64 = 4;
 
 #[cfg(feature = "client")]
 const HEAD_SLACK_SECS: u64 = 60;
+#[cfg(feature = "client")]
 const GENESIS_FLOOR_SECS: u64 = 1_735_689_600;
 
 pub const ADDRESS_PAYLOAD_LEN: usize = 32;
