@@ -573,19 +573,27 @@ fn word_list() -> Vec<&'static str> {
     include_str!("english.txt").lines().collect()
 }
 
+pub const PHRASE_CHECKSUM_BITS: usize = 19;
+pub const PHRASE_WORDS: usize = (SEED_LEN * 8 + PHRASE_CHECKSUM_BITS) / 11;
+
+fn checksum_bit(seed: &[u8; SEED_LEN], i: usize) -> u8 {
+    let digest = qtv_crypto::sha3::sha3_256(seed);
+    (digest[i / 8] >> (7 - i % 8)) & 1
+}
+
 pub fn mnemonic_from_seed(seed: &[u8; SEED_LEN]) -> Zeroizing<String> {
     let words = word_list();
-    let checksum = qtv_crypto::sha3::sha3_256(seed)[0];
-    let mut bits: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::with_capacity(SEED_LEN * 8 + 8));
+    let mut bits: Zeroizing<Vec<u8>> =
+        Zeroizing::new(Vec::with_capacity(SEED_LEN * 8 + PHRASE_CHECKSUM_BITS));
     for &byte in seed.iter() {
         for shift in (0..8).rev() {
             bits.push((byte >> shift) & 1);
         }
     }
-    for shift in (0..8).rev() {
-        bits.push((checksum >> shift) & 1);
+    for i in 0..PHRASE_CHECKSUM_BITS {
+        bits.push(checksum_bit(seed, i));
     }
-    let mut phrase = String::with_capacity(24 * 9);
+    let mut phrase = String::with_capacity(PHRASE_WORDS * 9);
     for chunk in bits.chunks(11) {
         let index = chunk
             .iter()
@@ -730,16 +738,17 @@ pub fn seed_from_mnemonic(phrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>, Str
             bits.push(((index >> shift) & 1) as u8);
         }
     }
-    if entered.len() != 24 {
+    if entered.len() != PHRASE_WORDS {
         if is_standard_phrase(&bits) {
             return Err(STANDARD_PHRASE.to_string());
         }
-        return Err("a recovery phrase is twenty four words".to_string());
+        return Err("a recovery phrase is twenty five words".to_string());
     }
     let mut seed = Zeroizing::new([0u8; SEED_LEN]);
     seed.copy_from_slice(&bits_to_bytes(&bits[..SEED_LEN * 8]));
-    let checksum = bits_to_bytes(&bits[SEED_LEN * 8..])[0];
-    if checksum != qtv_crypto::sha3::sha3_256(&*seed)[0] {
+    let checksum_ok =
+        (0..PHRASE_CHECKSUM_BITS).all(|i| bits[SEED_LEN * 8 + i] == checksum_bit(&seed, i));
+    if !checksum_ok {
         if is_standard_phrase(&bits) {
             return Err(STANDARD_PHRASE.to_string());
         }
@@ -2197,14 +2206,14 @@ mod tests {
             let err = seed_from_mnemonic(phrase).unwrap_err();
             assert_eq!(err, STANDARD_PHRASE, "{phrase}");
         }
-        let typo = format!("{} abandon", ["abandon"; 23].join(" "));
+        let typo = ["abandon"; 25].join(" ");
         assert!(seed_from_mnemonic(&typo)
             .unwrap_err()
             .contains("check for a typo"));
         let short = ["abandon"; 12].join(" ");
         assert!(seed_from_mnemonic(&short)
             .unwrap_err()
-            .contains("twenty four words"));
+            .contains("twenty five words"));
         for byte in 0u8..=255 {
             let seed = [byte; SEED_LEN];
             assert_eq!(
@@ -2561,7 +2570,7 @@ mod tests {
     fn a_seed_round_trips_through_its_recovery_phrase() {
         let seed = [7u8; SEED_LEN];
         let phrase = mnemonic_from_seed(&seed);
-        assert_eq!(phrase.split_whitespace().count(), 24);
+        assert_eq!(phrase.split_whitespace().count(), 25);
         assert_eq!(*seed_from_mnemonic(&phrase).unwrap(), seed);
         assert_eq!(
             account_address(&seed_from_mnemonic(&phrase).unwrap(), 0),

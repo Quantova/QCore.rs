@@ -366,8 +366,13 @@ pub fn build_typed_order_call(
     let message =
         canonical_order_message_typed(chain_id, &contract_id, selector, &signer, nonce, &values);
 
-    let signature = ml_dsa::sign(&secret, &message, &[], &[0u8; 32])
-        .ok_or("signing the order message failed")?;
+    let signature = ml_dsa::sign(
+        &secret,
+        &message,
+        qtv_vm::crypto::VM_VERIFY_CONTEXT,
+        &[0u8; 32],
+    )
+    .ok_or("signing the order message failed")?;
     debug_assert_eq!(
         signature.len(),
         qtv_vm::abi::ML_DSA_SIGNATURE_BYTES,
@@ -836,7 +841,7 @@ mod tests {
             order.public_key.as_slice().try_into().unwrap(),
             &order.message,
             order.signature.as_slice().try_into().unwrap(),
-            &[],
+            qtv_vm::crypto::VM_VERIFY_CONTEXT,
         ));
     }
 
@@ -1004,7 +1009,7 @@ mod tests {
             order.public_key.as_slice().try_into().unwrap(),
             &order.message,
             order.signature.as_slice().try_into().unwrap(),
-            &[],
+            qtv_vm::crypto::VM_VERIFY_CONTEXT,
         ));
     }
 
@@ -1051,7 +1056,7 @@ mod tests {
             order.public_key.as_slice().try_into().unwrap(),
             &order.message,
             order.signature.as_slice().try_into().unwrap(),
-            &[],
+            qtv_vm::crypto::VM_VERIFY_CONTEXT,
         ));
     }
 
@@ -1103,7 +1108,7 @@ mod tests {
             order.public_key.as_slice().try_into().unwrap(),
             &order.message,
             order.signature.as_slice().try_into().unwrap(),
-            &[],
+            qtv_vm::crypto::VM_VERIFY_CONTEXT,
         ));
     }
 
@@ -1302,7 +1307,7 @@ mod tests {
             order.public_key.as_slice().try_into().unwrap(),
             &order.message,
             order.signature.as_slice().try_into().unwrap(),
-            &[],
+            qtv_vm::crypto::VM_VERIFY_CONTEXT,
         ));
     }
 
