@@ -1430,6 +1430,7 @@ mod client {
                 valid_until,
                 info.transfer_fee,
             )?;
+            self.remember_signed(&order_key, nonce, u64::MAX);
             self.remember_signed(&caller, account_nonce, valid_until);
             let outcome = self.submit(&signed.tx_bytes)?;
             self.remember_used(&caller, account_nonce, &outcome);
@@ -1555,6 +1556,7 @@ mod client {
                     info.transfer_fee,
                 )?,
             };
+            self.remember_signed(&order_key, nonce, u64::MAX);
             self.remember_signed(&caller, account_nonce, valid_until);
             let outcome = self.submit(&signed.tx_bytes)?;
             self.remember_used(&caller, account_nonce, &outcome);
