@@ -24,7 +24,7 @@ pub const SEED_LEN: usize = 32;
 pub const MAX_PLAUSIBLE_HEAD: u64 = 1 << 40;
 
 #[cfg(feature = "client")]
-const HEAD_BLOCKS_PER_SEC: u64 = 4;
+const HEAD_BLOCKS_PER_SEC: u64 = 20;
 
 #[cfg(feature = "client")]
 const HEAD_SLACK_SECS: u64 = 60;
