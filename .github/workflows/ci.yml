@@ -16,18 +16,6 @@ jobs:
         with:
           path: QCore.rs
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          repository: Quantova/Quantova-Chain
-          ref: 3ed57775e1171f870e0236d8d605e07b6dc03761
-          path: Quantova-Chain
-          persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          repository: Quantova/QVM
-          ref: f7d82abb13a01039d78dca732660fd6700d7b830
-          path: QVM
-          persist-credentials: false
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
