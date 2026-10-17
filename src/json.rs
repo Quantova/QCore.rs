@@ -185,6 +185,7 @@ impl Parser {
     fn object(&mut self) -> Result<Json, String> {
         self.next();
         let mut fields = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         self.skip_ws();
         if self.peek() == Some('}') {
             self.next();
@@ -196,6 +197,9 @@ impl Parser {
                 return Err("expected a string key".to_string());
             }
             let key = self.string()?;
+            if !seen.insert(key.clone()) {
+                return Err("an object names the same key twice".to_string());
+            }
             self.skip_ws();
             if self.next() != Some(':') {
                 return Err("expected a colon after a key".to_string());

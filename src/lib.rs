@@ -2847,9 +2847,8 @@ mod tests {
     }
 
     #[test]
-    fn a_repeated_key_reads_the_last_value_like_a_browser() {
-        let v = crate::json::parse("{\"n\":\"1\",\"n\":\"9\"}").unwrap();
-        assert_eq!(v.get("n").and_then(crate::json::Json::as_str), Some("9"));
+    fn a_repeated_key_is_refused() {
+        assert!(crate::json::parse("{\"n\":\"1\",\"n\":\"9\"}").is_err());
     }
 
     #[test]

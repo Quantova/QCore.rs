@@ -126,8 +126,8 @@ pub fn verify_finality(
         }
         signed = signed.saturating_add(u128::from(member.stake));
     }
-    if signed.saturating_mul(3) <= total.saturating_mul(2) {
-        return Err("the attesting validators hold two thirds of the stake or less".to_string());
+    if signed.saturating_mul(3) < total.saturating_mul(2) {
+        return Err("the attesting validators hold less than two thirds of the stake".to_string());
     }
     Ok(FinalizedHeader {
         height: header.height(),
