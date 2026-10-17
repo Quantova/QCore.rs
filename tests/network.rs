@@ -119,8 +119,9 @@ fn a_testnet_network_carries_its_identifiers() {
         "testnet chain id"
     );
     assert_eq!(
-        testnet.rpc_url, None,
-        "the rust transport reaches only a loopback node, so testnet names no public url"
+        testnet.rpc_url.as_deref(),
+        Some(qcore::TESTNET_RPC_URL),
+        "testnet names the same public endpoint in every client"
     );
     assert_eq!(testnet.denomination, "Quon", "testnet denomination");
     assert_eq!(testnet.decimals, 6, "testnet decimals are six");
@@ -136,9 +137,28 @@ fn a_client_from_a_network_carries_that_network() {
         Some("Q-test-net-1"),
         "the client carries its configured network"
     );
-    assert!(
-        Client::for_network(Network::testnet(), false).is_err(),
-        "testnet has no default endpoint the rust transport can reach"
+    let refused = Client::for_network(Network::testnet(), false)
+        .err()
+        .expect("the built in loopback transport cannot reach the https testnet endpoint");
+    assert!(refused.contains("for_network_with_transport"), "{refused}");
+    struct Recorder(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+    impl qcore::Transport for Recorder {
+        fn post(&self, base: &str, path: &str, _body: &str) -> Result<(u16, String), String> {
+            self.0.lock().unwrap().push(format!("{base}{path}"));
+            Err("recorded".to_string())
+        }
+    }
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let through = Client::for_network_with_transport(
+        Network::testnet(),
+        false,
+        Box::new(Recorder(seen.clone())),
+    )
+    .expect("a supplied transport reaches the https endpoint");
+    assert!(through.node_info().is_err());
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        [format!("{}/v1/node_info", qcore::TESTNET_RPC_URL)]
     );
 }
 

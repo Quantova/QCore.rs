@@ -21,6 +21,7 @@ const MINT_SCHEME_OFF: u64 = 152;
 const MINT_PTR_OFF: u64 = 160;
 const MINT_AMOUNT_OFF: u64 = 168;
 const MINT_AMOUNT_HI_OFF: u64 = MINT_AMOUNT_OFF + 8;
+const MINT_EXPIRY_OFF: u64 = 184;
 const XFER_TO_OFF: u64 = 120;
 const XFER_AMOUNT_OFF: u64 = 152;
 
@@ -132,6 +133,8 @@ fn run() -> Result<(), String> {
         MINT_SELECTOR,
         MINT_SCHEME_OFF,
         MINT_PTR_OFF,
+        MINT_EXPIRY_OFF,
+        order_expiry(),
         REGION_OFF,
         &[
             FieldArg {
@@ -240,6 +243,8 @@ fn run() -> Result<(), String> {
         MINT_SELECTOR,
         MINT_SCHEME_OFF,
         MINT_PTR_OFF,
+        MINT_EXPIRY_OFF,
+        order_expiry(),
         REGION_OFF,
         &[
             FieldArg {
@@ -450,4 +455,12 @@ fn from_hex(s: &str) -> Result<Vec<u8>, String> {
                 .map_err(|_| "the container hex is not hex".to_string())
         })
         .collect()
+}
+
+fn order_expiry() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+        .saturating_add(3600)
 }

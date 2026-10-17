@@ -23,15 +23,15 @@ pub const SEED_LEN: usize = 32;
 
 pub const MAX_PLAUSIBLE_HEAD: u64 = 1 << 40;
 
-#[cfg(feature = "client")]
-const HEAD_BLOCKS_PER_SEC: u64 = 20;
+pub const HEAD_BLOCKS_PER_SEC: u64 = 20;
 
-#[cfg(feature = "client")]
-const HEAD_SLACK_BLOCKS: u64 = 240;
-#[cfg(feature = "client")]
-const GENESIS_FLOOR_SECS: u64 = 1_735_689_600;
-#[cfg(feature = "client")]
-const TESTNET_GENESIS_SECS: u64 = 1_791_082_813;
+pub const HEAD_SLACK_BLOCKS: u64 = 240;
+
+pub const GENESIS_FLOOR_SECS: u64 = 1_735_689_600;
+
+pub const TESTNET_GENESIS_SECS: u64 = 1_791_082_813;
+
+pub const TESTNET_RPC_URL: &str = "https://rpc-testnet.quantova.org";
 
 pub const ADDRESS_PAYLOAD_LEN: usize = 32;
 
@@ -65,7 +65,7 @@ impl Network {
         Network {
             name: "testnet".to_string(),
             chain_id: Some(TESTNET_CHAIN_NAME.to_string()),
-            rpc_url: None,
+            rpc_url: Some(TESTNET_RPC_URL.to_string()),
             explorer_url: Some("https://qvmscan.io".to_string()),
             denomination: DENOMINATION.to_string(),
             decimals: DECIMALS,
@@ -247,6 +247,69 @@ pub fn check_valid_until(valid_until: u64, head: u64) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+pub fn genesis_secs(chain_name: &str) -> u64 {
+    if chain_name == TESTNET_CHAIN_NAME {
+        TESTNET_GENESIS_SECS
+    } else {
+        GENESIS_FLOOR_SECS
+    }
+}
+
+pub fn head_ceiling(chain_name: &str, wall_secs: u64) -> u64 {
+    wall_secs
+        .saturating_sub(genesis_secs(chain_name))
+        .saturating_mul(HEAD_BLOCKS_PER_SEC)
+        .saturating_add(HEAD_SLACK_BLOCKS)
+}
+
+pub fn bounded_valid_until(
+    chain_name: &str,
+    head: u64,
+    wall_secs: u64,
+    floor: Option<u64>,
+    floor_age_secs: u64,
+) -> Result<u64, String> {
+    if head > MAX_PLAUSIBLE_HEAD {
+        return Err(format!(
+            "the gateway reports head {head}, past any height this chain can have reached, refusing to sign"
+        ));
+    }
+    if head > head_ceiling(chain_name, wall_secs) {
+        return Err(format!(
+            "the gateway reports head {head} further ahead than wall-clock time allows, refusing to sign"
+        ));
+    }
+    if let Some(floor) = floor {
+        if head < floor {
+            return Err(format!(
+                "the gateway reports head {head} below the {floor} it reported earlier, refusing to sign"
+            ));
+        }
+        let allowed = floor_age_secs
+            .saturating_mul(HEAD_BLOCKS_PER_SEC)
+            .saturating_add(HEAD_SLACK_BLOCKS);
+        if head > floor.saturating_add(allowed) {
+            return Err(format!(
+                "the gateway head leapt from {floor} to {head} faster than blocks are made, refusing to sign"
+            ));
+        }
+    }
+    let valid_until = head.saturating_add(DEFAULT_VALIDITY_BLOCKS);
+    check_valid_until(valid_until, head)?;
+    Ok(valid_until)
+}
+
+pub fn whole_number(text: &str) -> Option<u128> {
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+pub fn check_gateway_json(response: &str) -> Result<(), String> {
+    json::parse(response).map(|_| ())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -524,9 +587,8 @@ fn field_u64(v: &Json, key: &str) -> Result<u64, String> {
 }
 
 fn field_u128(v: &Json, key: &str) -> Result<u128, String> {
-    field_str(v, key)?
-        .parse::<u128>()
-        .map_err(|_| format!("the {key} field is not a number string"))
+    whole_number(&field_str(v, key)?)
+        .ok_or_else(|| format!("the {key} field is not a number string"))
 }
 
 fn field_u8(v: &Json, key: &str) -> Result<u8, String> {
@@ -538,7 +600,9 @@ pub fn valid_address(address: &str) -> bool {
     matches!(qtv_idfmt::parse_address(address), Ok(payload) if payload.len() == ADDRESS_PAYLOAD_LEN)
 }
 
-pub const LOOKALIKE_EDGE: usize = 6;
+pub const LOOKALIKE_EDGE: usize = 2;
+
+pub const LOOKALIKE_SPAN: usize = 8;
 
 pub fn same_address(a: &str, b: &str) -> bool {
     matches!((address_payload(a), address_payload(b)), (Ok(x), Ok(y)) if x == y)
@@ -546,14 +610,18 @@ pub fn same_address(a: &str, b: &str) -> bool {
 
 fn shares_edges(a: &str, b: &str) -> bool {
     let (a, b) = (a.to_ascii_uppercase(), b.to_ascii_uppercase());
-    let head = |t: &str| t.get(2..2 + LOOKALIKE_EDGE).map(str::to_string);
-    let tail = |t: &str| {
-        t.len()
-            .checked_sub(LOOKALIKE_EDGE)
-            .and_then(|i| t.get(i..))
-            .map(str::to_string)
+    let (Some(a), Some(b)) = (a.get(2..), b.get(2..)) else {
+        return false;
     };
-    head(&a).is_some() && head(&a) == head(&b) && tail(&a) == tail(&b)
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let head = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    let tail = a
+        .iter()
+        .rev()
+        .zip(b.iter().rev())
+        .take_while(|(x, y)| x == y)
+        .count();
+    head >= LOOKALIKE_EDGE && tail >= LOOKALIKE_EDGE && head + tail >= LOOKALIKE_SPAN
 }
 
 pub fn lookalike_of(candidate: &str, known: &[String]) -> Option<String> {
@@ -562,6 +630,153 @@ pub fn lookalike_of(candidate: &str, known: &[String]) -> Option<String> {
         let payload = address_payload(other).ok()?;
         (payload != target && shares_edges(candidate, other)).then(|| other.clone())
     })
+}
+
+pub const SESSION_REMEMBERED_ADDRESSES: usize = 1024;
+
+#[derive(Debug, Default, Clone)]
+pub struct SigningSession {
+    next: std::collections::HashMap<String, u64>,
+    held: std::collections::HashMap<String, std::collections::BTreeMap<u64, bool>>,
+    book: Vec<String>,
+    seen: std::collections::VecDeque<String>,
+}
+
+impl SigningSession {
+    pub fn new() -> SigningSession {
+        SigningSession::default()
+    }
+
+    pub fn with_address_book(book: &[String]) -> Result<SigningSession, String> {
+        let mut session = SigningSession::new();
+        for address in book {
+            if !valid_address(address) {
+                return Err(format!(
+                    "the address book entry {address} is not a Q1 address"
+                ));
+            }
+            session.book.push(address.clone());
+        }
+        Ok(session)
+    }
+
+    pub fn known(&self) -> Vec<String> {
+        self.book.iter().chain(self.seen.iter()).cloned().collect()
+    }
+
+    pub fn remember_address(&mut self, address: &str) {
+        if !valid_address(address)
+            || self
+                .book
+                .iter()
+                .chain(self.seen.iter())
+                .any(|known| same_address(known, address))
+        {
+            return;
+        }
+        if self.seen.len() >= SESSION_REMEMBERED_ADDRESSES {
+            self.seen.pop_front();
+        }
+        self.seen.push_back(address.to_string());
+    }
+
+    pub fn check_target(&self, address: &str) -> Result<(), String> {
+        let near = self.book.iter().chain(self.seen.iter()).find(|known| {
+            !same_address(known, address)
+                && valid_address(known)
+                && valid_address(address)
+                && shares_edges(address, known)
+        });
+        match near {
+            Some(near) => Err(format!(
+                "the address {address} shares its leading and trailing characters with {near}, which this client already knows, but is a different address, refusing to sign for a lookalike"
+            )),
+            None => Ok(()),
+        }
+    }
+
+    pub fn slot(
+        &mut self,
+        key: &str,
+        reported: u64,
+        expected: Option<u64>,
+        order: bool,
+    ) -> Result<u64, String> {
+        if let Some(exp) = expected {
+            if exp != reported {
+                return Err(format!(
+                    "the gateway reported nonce {reported} but you expected {exp}; the chain admits \
+                     only the nonce the account has reached, refusing to sign"
+                ));
+            }
+        }
+        let held = self.held.entry(key.to_string()).or_default();
+        held.retain(|slot, accepted| !(*accepted && *slot < reported));
+        if expected.is_some() {
+            held.retain(|slot, _| *slot > reported);
+        } else {
+            if order {
+                if let Some(local) = self.next.get(key).copied() {
+                    if reported > local {
+                        return Err(format!(
+                            "the gateway reports order nonce {reported} above the {local} this client tracked, \
+                             refusing to sign an order that stays valid until the contract reaches that nonce; \
+                             pass the expected order nonce to sign at it"
+                        ));
+                    }
+                }
+            }
+            if held.contains_key(&reported) {
+                return Err(format!(
+                    "a transaction was already signed for nonce {reported} in this session and was not \
+                     superseded; one nonce carries one signature, so if it never landed pass that nonce \
+                     explicitly to sign at it again"
+                ));
+            }
+            if let Some((&stale, _)) = held
+                .iter()
+                .find(|(slot, accepted)| **slot < reported && !**accepted)
+            {
+                return Err(format!(
+                    "a transaction signed at nonce {stale} in this session was not accepted, yet the \
+                     gateway now reports nonce {reported} past it; check whether it landed, then pass \
+                     nonce {reported} explicitly to sign at it"
+                ));
+            }
+        }
+        let local = self.next.entry(key.to_string()).or_insert(reported);
+        *local = (*local).max(reported);
+        Ok(reported)
+    }
+
+    pub fn signed(&mut self, key: &str, slot: u64) {
+        self.held
+            .entry(key.to_string())
+            .or_default()
+            .insert(slot, false);
+    }
+
+    pub fn outcome(&mut self, key: &str, slot: u64, accepted: bool) {
+        if !accepted {
+            return;
+        }
+        self.held
+            .entry(key.to_string())
+            .or_default()
+            .insert(slot, true);
+        let local = self.next.entry(key.to_string()).or_insert(0);
+        *local = (*local).max(slot.saturating_add(1));
+    }
+
+    pub fn next_nonce(&self, key: &str) -> Option<u64> {
+        self.next.get(key).copied()
+    }
+
+    pub fn is_held(&self, key: &str, slot: u64) -> bool {
+        self.held
+            .get(key)
+            .is_some_and(|held| held.contains_key(&slot))
+    }
 }
 
 pub fn address_payload(address: &str) -> Result<[u8; 32], String> {
@@ -609,7 +824,7 @@ pub fn mnemonic_from_seed(seed: &[u8; SEED_LEN]) -> Zeroizing<String> {
     Zeroizing::new(phrase)
 }
 
-const STANDARD_PHRASE: &str = "this is a standard BIP-39 recovery phrase from another wallet, not a Quantova recovery phrase, so it cannot restore a Quantova account";
+const STANDARD_PHRASE: &str = "this phrase carries a standard BIP-39 checksum and is not a twenty five word Quantova recovery phrase, so it cannot restore a Quantova account";
 
 fn compat_letters(c: char) -> Option<String> {
     let code = u32::from(c);
@@ -759,6 +974,20 @@ pub fn seed_from_mnemonic(phrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>, Str
     Ok(seed)
 }
 
+pub fn seed_from_mnemonic_bytes(phrase: &[u8]) -> Result<Zeroizing<[u8; SEED_LEN]>, String> {
+    let text = Zeroizing::new(
+        std::str::from_utf8(phrase)
+            .map_err(|_| "the recovery phrase is not UTF-8 text".to_string())?
+            .to_string(),
+    );
+    seed_from_mnemonic(&text)
+}
+
+pub fn mnemonic_bytes_from_seed(seed: &[u8; SEED_LEN]) -> Zeroizing<Vec<u8>> {
+    let phrase = mnemonic_from_seed(seed);
+    Zeroizing::new(phrase.as_bytes().to_vec())
+}
+
 pub fn parse_node_info(response: &str) -> Result<NodeInfo, String> {
     let v = json::parse(response)?;
     let fee = v.get("fee").ok_or("no fee in node info")?;
@@ -839,7 +1068,7 @@ pub fn generate_seed() -> Result<Zeroizing<[u8; SEED_LEN]>, String> {
 }
 
 #[cfg(feature = "client")]
-pub use client::Client;
+pub use client::{Client, Transport};
 
 #[cfg(feature = "client")]
 mod client {
@@ -850,19 +1079,26 @@ mod client {
         format!("{contract}/{hex}")
     }
 
-    type HeldNonces = std::collections::HashMap<
-        String,
-        std::collections::BTreeMap<u64, (u64, std::time::Instant)>,
-    >;
+    pub trait Transport {
+        fn post(&self, base: &str, path: &str, body: &str) -> Result<(u16, String), String>;
+    }
+
+    struct LoopbackHttp;
+
+    impl Transport for LoopbackHttp {
+        fn post(&self, base: &str, path: &str, body: &str) -> Result<(u16, String), String> {
+            http::post(base, path, body)
+        }
+    }
 
     pub struct Client {
         base: String,
         network: Network,
         acknowledge_mainnet: bool,
+        transport: Box<dyn Transport>,
         pinned_chain: std::cell::RefCell<Option<String>>,
         head_floor: std::cell::Cell<Option<(u64, std::time::Instant)>>,
-        next_nonces: std::cell::RefCell<std::collections::HashMap<String, u64>>,
-        signed_nonces: std::cell::RefCell<HeldNonces>,
+        session: std::cell::RefCell<SigningSession>,
     }
 
     fn fresh(base: String, network: Network, acknowledge_mainnet: bool) -> Client {
@@ -870,15 +1106,19 @@ mod client {
             base: normalize_base(base),
             network,
             acknowledge_mainnet,
+            transport: Box::new(LoopbackHttp),
             pinned_chain: std::cell::RefCell::new(None),
             head_floor: std::cell::Cell::new(None),
-            next_nonces: std::cell::RefCell::new(std::collections::HashMap::new()),
-            signed_nonces: std::cell::RefCell::new(std::collections::HashMap::new()),
+            session: std::cell::RefCell::new(SigningSession::new()),
         }
     }
 
     fn normalize_base(base: String) -> String {
         base.trim_end_matches('/').to_string()
+    }
+
+    fn accepted(outcome: &Submit) -> bool {
+        matches!(outcome, Submit::Accepted { .. })
     }
 
     impl Client {
@@ -889,6 +1129,26 @@ mod client {
         }
 
         pub fn for_network(network: Network, acknowledge_mainnet: bool) -> Result<Client, String> {
+            let base = Self::network_base(&network, acknowledge_mainnet)?;
+            if !base.starts_with("http://") {
+                return Err(format!(
+                    "the {} network is served at {base}, and the built in transport reaches only a plaintext loopback node, so open it with Client::for_network_with_transport and a TLS transport, or pass a loopback endpoint with Client::with_network",
+                    network.name
+                ));
+            }
+            Ok(fresh(base, network, acknowledge_mainnet))
+        }
+
+        pub fn for_network_with_transport(
+            network: Network,
+            acknowledge_mainnet: bool,
+            transport: Box<dyn Transport>,
+        ) -> Result<Client, String> {
+            let base = Self::network_base(&network, acknowledge_mainnet)?;
+            Ok(fresh(base, network, acknowledge_mainnet).with_transport(transport))
+        }
+
+        fn network_base(network: &Network, acknowledge_mainnet: bool) -> Result<String, String> {
             let base = network.rpc_url.clone().ok_or_else(|| {
                 format!(
                     "the {} network has no rpc endpoint yet, pass the endpoint explicitly with Client::with_network",
@@ -898,7 +1158,7 @@ mod client {
             if network.is_mainnet && !acknowledge_mainnet {
                 return Err("refusing to open a mainnet client without acknowledging it, a mainnet transaction moves real value so the network must be chosen on purpose".to_string());
             }
-            Ok(fresh(base, network, acknowledge_mainnet))
+            Ok(base)
         }
 
         pub fn with_network(
@@ -909,8 +1169,22 @@ mod client {
             fresh(base.into(), network, acknowledge_mainnet)
         }
 
+        pub fn with_transport(mut self, transport: Box<dyn Transport>) -> Client {
+            self.transport = transport;
+            self
+        }
+
+        pub fn with_address_book(self, book: &[String]) -> Result<Client, String> {
+            *self.session.borrow_mut() = SigningSession::with_address_book(book)?;
+            Ok(self)
+        }
+
         pub fn network(&self) -> &Network {
             &self.network
+        }
+
+        pub fn session(&self) -> SigningSession {
+            self.session.borrow().clone()
         }
 
         fn guard_mainnet(&self) -> Result<(), String> {
@@ -921,6 +1195,22 @@ mod client {
                 ));
             }
             Ok(())
+        }
+
+        fn vet_target(&self, sender: &str, targets: &[&str]) -> Result<(), String> {
+            let mut session = self.session.borrow_mut();
+            session.remember_address(sender);
+            for target in targets {
+                session.check_target(target)?;
+            }
+            Ok(())
+        }
+
+        fn remember_targets(&self, targets: &[&str]) {
+            let mut session = self.session.borrow_mut();
+            for target in targets {
+                session.remember_address(target);
+            }
         }
 
         pub(crate) fn signing_chain_id(&self, info: &NodeInfo) -> Result<u64, String> {
@@ -964,7 +1254,9 @@ mod client {
         }
 
         fn rpc(&self, method: &str, body: String) -> Result<String, String> {
-            let (status, text) = http::post(&self.base, &format!("/v1/{method}"), &body)?;
+            let (status, text) =
+                self.transport
+                    .post(&self.base, &format!("/v1/{method}"), &body)?;
             if status == 200 {
                 Ok(text)
             } else {
@@ -1018,6 +1310,8 @@ mod client {
             if !valid_address(to) {
                 return Err("the recipient is not a Q1 address".to_string());
             }
+            let sender = account_address(seed, index);
+            self.vet_target(&sender, &[to])?;
             let info = self.node_info()?;
             self.guard_mainnet()?;
             if info.transfer_fee > max_fee {
@@ -1028,8 +1322,7 @@ mod client {
             }
             let chain_id = self.signing_chain_id(&info)?;
             let valid_until = self.validity(&info)?;
-            let sender = account_address(seed, index);
-            let nonce = self.checked_nonce(&sender, expected_nonce, info.head_height)?;
+            let nonce = self.checked_nonce(&sender, expected_nonce)?;
             let signed = sign_transfer(
                 seed,
                 index,
@@ -1040,124 +1333,55 @@ mod client {
                 chain_id,
                 valid_until,
             )?;
-            self.remember_signed(&sender, nonce, valid_until);
-            let outcome = self.submit(&signed.tx_bytes)?;
-            self.remember_used(&sender, nonce, &outcome);
+            self.remember_targets(&[to]);
+            let outcome = self.submit_held(&[(&sender, nonce)], &signed)?;
             Ok((signed, outcome))
         }
 
-        fn checked_nonce(
-            &self,
-            sender: &str,
-            expected: Option<u64>,
-            head: u64,
-        ) -> Result<u64, String> {
+        fn checked_nonce(&self, sender: &str, expected: Option<u64>) -> Result<u64, String> {
             let account = self.account(sender)?;
-            self.expected_slot(sender, account.nonce, expected, head)
-        }
-
-        fn expected_slot(
-            &self,
-            key: &str,
-            reported: u64,
-            expected: Option<u64>,
-            head: u64,
-        ) -> Result<u64, String> {
-            if let Some(exp) = expected {
-                if exp != reported {
-                    return Err(format!(
-                        "the gateway reported nonce {reported} but you expected {exp}; the chain admits \
-                         only the nonce the account has reached, refusing to sign"
-                    ));
-                }
-            }
-            {
-                let mut next = self.next_nonces.borrow_mut();
-                let local = next.entry(key.to_string()).or_insert(reported);
-                *local = (*local).max(reported);
-            }
-            if let Some(held) = self.signed_nonces.borrow_mut().get_mut(key) {
-                held.retain(|_, (until, at)| {
-                    *until >= head
-                        || at.elapsed().as_secs().saturating_mul(HEAD_BLOCKS_PER_SEC)
-                            < DEFAULT_VALIDITY_BLOCKS
-                });
-                if expected.is_none() && held.contains_key(&reported) {
-                    return Err(format!(
-                        "a transaction was already signed for nonce {reported} in this session and was \
-                         neither rejected nor expired; if it was never broadcast, pass that nonce \
-                         explicitly to sign at it again"
-                    ));
-                }
-            }
-            Ok(reported)
-        }
-
-        fn remember_signed(&self, key: &str, used: u64, valid_until: u64) {
-            self.signed_nonces
+            self.session
                 .borrow_mut()
-                .entry(key.to_string())
-                .or_default()
-                .insert(used, (valid_until, std::time::Instant::now()));
+                .slot(sender, account.nonce, expected, false)
         }
 
-        fn remember_used(&self, key: &str, used: u64, outcome: &Submit) {
-            match outcome {
-                Submit::Accepted { .. } => {
-                    let mut next = self.next_nonces.borrow_mut();
-                    let local = next.entry(key.to_string()).or_insert(0);
-                    *local = (*local).max(used.saturating_add(1));
+        fn submit_held(
+            &self,
+            slots: &[(&str, u64)],
+            signed: &SignedTransfer,
+        ) -> Result<Submit, String> {
+            {
+                let mut session = self.session.borrow_mut();
+                for (key, slot) in slots {
+                    session.signed(key, *slot);
                 }
-                Submit::Rejected { .. } => {}
             }
+            let outcome = self.submit(&signed.tx_bytes)?;
+            let mut session = self.session.borrow_mut();
+            for (key, slot) in slots {
+                session.outcome(key, *slot, accepted(&outcome));
+            }
+            Ok(outcome)
         }
 
         fn validity(&self, info: &NodeInfo) -> Result<u64, String> {
             let head = info.head_height;
-            if head > MAX_PLAUSIBLE_HEAD {
-                return Err(format!(
-                    "the gateway reports head {head}, past any height this chain can have reached, refusing to sign"
-                ));
-            }
-            if let Ok(wall) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-                let secs = wall.as_secs();
-                let genesis = if info.chain_id == TESTNET_CHAIN_NAME {
-                    TESTNET_GENESIS_SECS
-                } else {
-                    GENESIS_FLOOR_SECS
-                };
-                if secs > genesis {
-                    let max_head = (secs - genesis)
-                        .saturating_mul(HEAD_BLOCKS_PER_SEC)
-                        .saturating_add(HEAD_SLACK_BLOCKS);
-                    if head > max_head {
-                        return Err(format!(
-                            "the gateway reports head {head} further ahead than wall-clock time allows, refusing to sign"
-                        ));
-                    }
-                }
-            }
+            let wall = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
             let now = std::time::Instant::now();
-            if let Some((floor, at)) = self.head_floor.get() {
-                if head < floor {
-                    return Err(format!(
-                        "the gateway reports head {head} below the {floor} it reported earlier, refusing to sign"
-                    ));
-                }
-                let allowed = now
-                    .duration_since(at)
-                    .as_secs()
-                    .saturating_mul(HEAD_BLOCKS_PER_SEC)
-                    .saturating_add(HEAD_SLACK_BLOCKS);
-                if head > floor.saturating_add(allowed) {
-                    return Err(format!(
-                        "the gateway head leapt from {floor} to {head} faster than blocks are made, refusing to sign"
-                    ));
-                }
-            }
-            let valid_until = valid_until_from(info);
-            check_valid_until(valid_until, head)?;
-            if self.head_floor.get().is_none_or(|(floor, _)| head > floor) {
+            let floor = self.head_floor.get();
+            let valid_until = bounded_valid_until(
+                &info.chain_id,
+                head,
+                wall,
+                floor.map(|(height, _)| height),
+                floor
+                    .map(|(_, at)| now.duration_since(at).as_secs())
+                    .unwrap_or(0),
+            )?;
+            if floor.is_none_or(|(height, _)| head > height) {
                 self.head_floor.set(Some((head, now)));
             }
             Ok(valid_until)
@@ -1222,13 +1446,14 @@ mod client {
             if !valid_address(target) {
                 return Err("the target is not a Q1 address".to_string());
             }
+            let sender = account_address(seed, index);
+            self.vet_target(&sender, &[target])?;
             let info = self.node_info()?;
             self.guard_mainnet()?;
             let fee = self.fee_within(vm_call_fee(info.transfer_fee, meter_limit), max_fee)?;
             let chain_id = self.signing_chain_id(&info)?;
             let valid_until = self.validity(&info)?;
-            let sender = account_address(seed, index);
-            let nonce = self.checked_nonce(&sender, expected_nonce, info.head_height)?;
+            let nonce = self.checked_nonce(&sender, expected_nonce)?;
             let signed = sign_payable_call(
                 seed,
                 index,
@@ -1242,9 +1467,8 @@ mod client {
                 valid_until,
                 info.transfer_fee,
             )?;
-            self.remember_signed(&sender, nonce, valid_until);
-            let outcome = self.submit(&signed.tx_bytes)?;
-            self.remember_used(&sender, nonce, &outcome);
+            self.remember_targets(&[target]);
+            let outcome = self.submit_held(&[(&sender, nonce)], &signed)?;
             Ok((signed, outcome))
         }
 
@@ -1286,13 +1510,20 @@ mod client {
             max_fee: u128,
             expected_nonce: Option<u64>,
         ) -> Result<(SignedTransfer, Submit), String> {
+            if !valid_address(target) {
+                return Err("the target is not a Q1 address".to_string());
+            }
+            if !valid_address(asset_issuer) {
+                return Err("the asset issuer is not a Q1 address".to_string());
+            }
+            let sender = account_address(seed, index);
+            self.vet_target(&sender, &[target, asset_issuer])?;
             let info = self.node_info()?;
             self.guard_mainnet()?;
             let fee = self.fee_within(vm_call_fee(info.transfer_fee, meter_limit), max_fee)?;
             let chain_id = self.signing_chain_id(&info)?;
             let valid_until = self.validity(&info)?;
-            let sender = account_address(seed, index);
-            let nonce = self.checked_nonce(&sender, expected_nonce, info.head_height)?;
+            let nonce = self.checked_nonce(&sender, expected_nonce)?;
             let signed = sign_asset_call(
                 seed,
                 index,
@@ -1307,9 +1538,8 @@ mod client {
                 valid_until,
                 info.transfer_fee,
             )?;
-            self.remember_signed(&sender, nonce, valid_until);
-            let outcome = self.submit(&signed.tx_bytes)?;
-            self.remember_used(&sender, nonce, &outcome);
+            self.remember_targets(&[target, asset_issuer]);
+            let outcome = self.submit_held(&[(&sender, nonce)], &signed)?;
             Ok((signed, outcome))
         }
 
@@ -1406,6 +1636,8 @@ mod client {
             if !valid_address(contract) {
                 return Err("the contract is not a Q1 address".to_string());
             }
+            let caller = account_address(caller_seed, caller_index);
+            self.vet_target(&caller, &[contract])?;
             let info = self.node_info()?;
             self.guard_mainnet()?;
             let fee = self.fee_within(vm_call_fee(info.transfer_fee, meter_limit), max_fee)?;
@@ -1413,12 +1645,11 @@ mod client {
             let valid_until = self.validity(&info)?;
             let signer = contract::order_signer(owner_seed, owner_index);
             let order_key = order_slot_key(contract, &signer);
-            let nonce = self.expected_slot(
-                &order_key,
-                self.contract_nonce(contract, &signer)?,
-                expected_order_nonce,
-                info.head_height,
-            )?;
+            let reported = self.contract_nonce(contract, &signer)?;
+            let nonce =
+                self.session
+                    .borrow_mut()
+                    .slot(&order_key, reported, expected_order_nonce, true)?;
             let order = contract::build_signed_order_call(
                 chain_id,
                 contract,
@@ -1429,8 +1660,7 @@ mod client {
                 owner_index,
                 nonce,
             )?;
-            let caller = account_address(caller_seed, caller_index);
-            let account_nonce = self.checked_nonce(&caller, expected_nonce, info.head_height)?;
+            let account_nonce = self.checked_nonce(&caller, expected_nonce)?;
             let signed = sign_call(
                 caller_seed,
                 caller_index,
@@ -1443,11 +1673,9 @@ mod client {
                 valid_until,
                 info.transfer_fee,
             )?;
-            self.remember_signed(&order_key, nonce, u64::MAX);
-            self.remember_signed(&caller, account_nonce, valid_until);
-            let outcome = self.submit(&signed.tx_bytes)?;
-            self.remember_used(&caller, account_nonce, &outcome);
-            self.remember_used(&order_key, nonce, &outcome);
+            self.remember_targets(&[contract]);
+            let outcome =
+                self.submit_held(&[(&order_key, nonce), (&caller, account_nonce)], &signed)?;
             Ok((signed, outcome, order))
         }
 
@@ -1460,6 +1688,8 @@ mod client {
             selector: [u8; 4],
             scheme_off: u64,
             ptr_off: u64,
+            expiry_off: u64,
+            expiry: u64,
             region_off: u64,
             fields: &[contract::FieldArg],
             owner_seed: &[u8; SEED_LEN],
@@ -1476,6 +1706,8 @@ mod client {
                 selector,
                 scheme_off,
                 ptr_off,
+                expiry_off,
+                expiry,
                 region_off,
                 fields,
                 owner_seed,
@@ -1498,6 +1730,8 @@ mod client {
             selector: [u8; 4],
             scheme_off: u64,
             ptr_off: u64,
+            expiry_off: u64,
+            expiry: u64,
             region_off: u64,
             fields: &[contract::FieldArg],
             owner_seed: &[u8; SEED_LEN],
@@ -1512,6 +1746,13 @@ mod client {
             if !valid_address(contract) {
                 return Err("the contract is not a Q1 address".to_string());
             }
+            if in_asset.is_some_and(|issuer| !valid_address(issuer)) {
+                return Err("the asset issuer is not a Q1 address".to_string());
+            }
+            let caller = account_address(caller_seed, caller_index);
+            let mut targets = vec![contract];
+            targets.extend(in_asset);
+            self.vet_target(&caller, &targets)?;
             let info = self.node_info()?;
             self.guard_mainnet()?;
             let fee = self.fee_within(vm_call_fee(info.transfer_fee, meter_limit), max_fee)?;
@@ -1519,26 +1760,26 @@ mod client {
             let valid_until = self.validity(&info)?;
             let signer = contract::order_signer(owner_seed, owner_index);
             let order_key = order_slot_key(contract, &signer);
-            let nonce = self.expected_slot(
-                &order_key,
-                self.contract_nonce(contract, &signer)?,
-                expected_order_nonce,
-                info.head_height,
-            )?;
+            let reported = self.contract_nonce(contract, &signer)?;
+            let nonce =
+                self.session
+                    .borrow_mut()
+                    .slot(&order_key, reported, expected_order_nonce, true)?;
             let order = contract::build_typed_order_call(
                 chain_id,
                 contract,
                 selector,
                 scheme_off,
                 ptr_off,
+                expiry_off,
                 region_off,
                 fields,
                 owner_seed,
                 owner_index,
                 nonce,
+                expiry,
             )?;
-            let caller = account_address(caller_seed, caller_index);
-            let account_nonce = self.checked_nonce(&caller, expected_nonce, info.head_height)?;
+            let account_nonce = self.checked_nonce(&caller, expected_nonce)?;
             let args = order.call_args.clone();
             let signed = match in_asset {
                 Some(issuer) => sign_asset_call(
@@ -1569,11 +1810,9 @@ mod client {
                     info.transfer_fee,
                 )?,
             };
-            self.remember_signed(&order_key, nonce, u64::MAX);
-            self.remember_signed(&caller, account_nonce, valid_until);
-            let outcome = self.submit(&signed.tx_bytes)?;
-            self.remember_used(&caller, account_nonce, &outcome);
-            self.remember_used(&order_key, nonce, &outcome);
+            self.remember_targets(&targets);
+            let outcome =
+                self.submit_held(&[(&order_key, nonce), (&caller, account_nonce)], &signed)?;
             Ok((signed, outcome, order))
         }
 
@@ -1608,13 +1847,14 @@ mod client {
             max_fee: u128,
             expected_nonce: Option<u64>,
         ) -> Result<(SignedTransfer, Submit, String), String> {
+            let deployer = account_address(seed, index);
+            self.vet_target(&deployer, &[])?;
             let info = self.node_info()?;
             self.guard_mainnet()?;
             let fee = self.fee_within(vm_call_fee(info.transfer_fee, meter_limit), max_fee)?;
             let chain_id = self.signing_chain_id(&info)?;
             let valid_until = self.validity(&info)?;
-            let deployer = account_address(seed, index);
-            let account_nonce = self.checked_nonce(&deployer, expected_nonce, info.head_height)?;
+            let account_nonce = self.checked_nonce(&deployer, expected_nonce)?;
             let args = contract::build_deploy_call(container, params);
             let contract = contract_address(&deployer, account_nonce)
                 .ok_or("the deployer is not a Q1 address")?;
@@ -1630,9 +1870,10 @@ mod client {
                 valid_until,
                 info.transfer_fee,
             )?;
-            self.remember_signed(&deployer, account_nonce, valid_until);
-            let outcome = self.submit(&signed.tx_bytes)?;
-            self.remember_used(&deployer, account_nonce, &outcome);
+            let outcome = self.submit_held(&[(&deployer, account_nonce)], &signed)?;
+            if accepted(&outcome) {
+                self.remember_targets(&[&contract]);
+            }
             Ok((signed, outcome, contract))
         }
 
@@ -1664,6 +1905,8 @@ mod client {
             max_fee: u128,
             expected_nonce: Option<u64>,
         ) -> Result<(SignedTransfer, Submit), String> {
+            let sender = account_address(seed, index);
+            self.vet_target(&sender, &[])?;
             let info = self.node_info()?;
             self.guard_mainnet()?;
             if info.transfer_fee > max_fee {
@@ -1674,13 +1917,10 @@ mod client {
             }
             let chain_id = self.signing_chain_id(&info)?;
             let valid_until = self.validity(&info)?;
-            let sender = account_address(seed, index);
-            let nonce = self.checked_nonce(&sender, expected_nonce, info.head_height)?;
+            let nonce = self.checked_nonce(&sender, expected_nonce)?;
             let signed =
                 sign_register(seed, index, nonce, info.transfer_fee, chain_id, valid_until)?;
-            self.remember_signed(&sender, nonce, valid_until);
-            let outcome = self.submit(&signed.tx_bytes)?;
-            self.remember_used(&sender, nonce, &outcome);
+            let outcome = self.submit_held(&[(&sender, nonce)], &signed)?;
             Ok((signed, outcome))
         }
     }
@@ -1798,100 +2038,100 @@ mod client {
             assert_eq!(MAX_VALIDITY_BLOCKS, 3_600);
         }
 
-        fn accepted() -> Submit {
-            Submit::Accepted {
-                state: String::new(),
-                tx_id: String::new(),
-            }
-        }
-
-        fn rejected() -> Submit {
-            Submit::Rejected {
-                reason: String::new(),
-                expected: None,
-                got: None,
-            }
-        }
-
         #[test]
         fn an_expected_nonce_must_be_the_reported_one() {
-            let client = Client::new("http://127.0.0.1:1");
-            assert!(client.expected_slot("b", 9, Some(3), 10).is_err());
+            let mut session = SigningSession::new();
+            assert!(session.slot("b", 9, Some(3), false).is_err());
             assert!(
-                client.expected_slot("b", 2, Some(3), 10).is_err(),
+                session.slot("b", 2, Some(3), false).is_err(),
                 "the mempool admits only the nonce the account has reached, so a slot ahead of it is refused"
             );
-            assert_eq!(client.expected_slot("b", 3, Some(3), 10).unwrap(), 3);
+            assert_eq!(session.slot("b", 3, Some(3), false).unwrap(), 3);
         }
 
         #[test]
         fn the_local_nonce_follows_the_highest_reported_one_rather_than_refusing() {
-            let client = Client::new("http://127.0.0.1:1");
-            assert_eq!(client.expected_slot("a", 4, None, 10).unwrap(), 4);
-            client.remember_used("a", 4, &accepted());
-            assert_eq!(client.next_nonces.borrow().get("a").copied(), Some(5));
+            let mut session = SigningSession::new();
+            assert_eq!(session.slot("a", 4, None, false).unwrap(), 4);
+            session.signed("a", 4);
+            session.outcome("a", 4, true);
+            assert_eq!(session.next_nonce("a"), Some(5));
             assert_eq!(
-                client.expected_slot("a", 9, None, 10).unwrap(),
+                session.slot("a", 9, None, false).unwrap(),
                 9,
-                "a gateway ahead of the local nonce raises it"
+                "a gateway ahead of the local nonce raises it once every signed slot was accepted"
             );
-            assert_eq!(client.next_nonces.borrow().get("a").copied(), Some(9));
-            assert_eq!(
-                client.expected_slot("a", 4, None, 10).unwrap(),
-                4,
-                "a submission that never lands leaves the chain at 4, and 4 is what it will admit"
+            assert_eq!(session.next_nonce("a"), Some(9));
+            assert!(
+                !session.is_held("a", 4),
+                "an accepted slot below the reported nonce is consumed"
             );
-            assert_eq!(client.next_nonces.borrow().get("a").copied(), Some(9));
         }
 
         #[test]
-        fn a_signed_nonce_is_held_until_it_expires_or_is_explicitly_replaced() {
-            let client = Client::new("http://127.0.0.1:1");
-            client.remember_signed("a", 4, 310);
+        fn a_signed_nonce_is_held_until_the_caller_names_it_again() {
+            let mut session = SigningSession::new();
+            session.slot("a", 4, None, false).unwrap();
+            session.signed("a", 4);
             assert!(
-                client.expected_slot("a", 4, None, 10).is_err(),
+                session.slot("a", 4, None, false).is_err(),
                 "a slot already signed this session is not signed again unnamed"
             );
+            session.outcome("a", 4, false);
+            assert!(
+                session.slot("a", 4, None, false).is_err(),
+                "a gateway-asserted rejection does not free a signed slot"
+            );
+            assert!(
+                session.slot("a", 5, None, false).is_err(),
+                "a gateway reporting the next nonce after rejecting the signed one is refused"
+            );
             assert_eq!(
-                client.expected_slot("a", 4, Some(4), 10).unwrap(),
+                session.slot("a", 4, Some(4), false).unwrap(),
                 4,
                 "naming the slot is how a caller says the first never landed"
             );
-            client.remember_used("a", 4, &rejected());
+            session.signed("a", 4);
+            session.outcome("a", 4, true);
             assert!(
-                client.expected_slot("a", 4, None, 10).is_err(),
-                "a gateway-asserted rejection does not free a signed slot"
+                session.slot("a", 4, None, false).is_err(),
+                "an accepted slot the chain has not passed is still held"
             );
-            assert_eq!(
-                client.expected_slot("a", 4, Some(4), 10).unwrap(),
-                4,
-                "the caller still replaces an unlanded slot by naming it"
-            );
-            client.remember_signed("a", 4, 310);
+            assert_eq!(session.slot("a", 5, None, false).unwrap(), 5);
+        }
+
+        #[test]
+        fn an_order_nonce_above_the_tracked_one_needs_the_caller() {
+            let mut session = SigningSession::new();
+            assert_eq!(session.slot("o", 2, None, true).unwrap(), 2);
             assert!(
-                client.expected_slot("a", 4, None, 310).is_err(),
-                "a transaction is still live at its deadline height"
+                session.slot("o", 7, None, true).is_err(),
+                "an order nonce the gateway raised on its own is refused"
             );
-            assert!(
-                client.expected_slot("a", 4, None, 311).is_err(),
-                "a gateway head past the deadline does not free the slot before blocks could have been made"
-            );
-            let signed_at = std::time::Instant::now()
-                .checked_sub(std::time::Duration::from_secs(
-                    DEFAULT_VALIDITY_BLOCKS / HEAD_BLOCKS_PER_SEC,
-                ))
-                .unwrap();
-            client
-                .signed_nonces
-                .borrow_mut()
-                .get_mut("a")
-                .unwrap()
-                .insert(4, (310, signed_at));
-            assert_eq!(
-                client.expected_slot("a", 4, None, 311).unwrap(),
-                4,
-                "a deadline that has passed frees its slot"
-            );
+            assert_eq!(session.slot("o", 7, Some(7), true).unwrap(), 7);
+        }
+
+        #[test]
+        fn a_lookalike_of_a_known_address_is_refused() {
+            let own = account_address(&[3u8; 32], 0);
+            let mut session =
+                SigningSession::with_address_book(std::slice::from_ref(&own)).unwrap();
+            assert!(session.check_target(&own).is_ok());
+            let mut fake = None;
+            let mut payload = address_payload(&own).unwrap();
+            for i in 0..1_000_000u32 {
+                payload[28..].copy_from_slice(&i.to_le_bytes());
+                let candidate = qtv_idfmt::render_address(&payload).unwrap();
+                if candidate != own && candidate[candidate.len() - 2..] == own[own.len() - 2..] {
+                    fake = Some(candidate);
+                    break;
+                }
+            }
+            let fake =
+                fake.expect("two trailing characters are cheap to match under a shared prefix");
+            assert!(session.check_target(&fake).is_err());
+            session.remember_address(&fake);
+            assert!(SigningSession::with_address_book(&["junk".to_string()]).is_err());
         }
 
         fn gateway(replies: Vec<String>) -> String {
@@ -1953,7 +2193,7 @@ mod client {
             let to = account_address(&seed, 1);
             let configured = Client::with_network(base.clone(), Network::testnet(), false);
             assert!(configured.transfer(&seed, 0, &to, 5, 500).is_err());
-            assert!(configured.signed_nonces.borrow().is_empty());
+            assert!(!configured.session.borrow().is_held(&sender, 0));
             let client = Client::new(base);
             assert!(client.transfer(&seed, 0, &to, 5, 500).is_err());
             assert!(client
@@ -1961,10 +2201,10 @@ mod client {
                 .unwrap_err()
                 .contains("self transfer"));
             assert!(
-                client.signed_nonces.borrow().is_empty(),
+                !client.session.borrow().is_held(&sender, 0),
                 "a chain, head or signing refusal must not hold the nonce it never signed"
             );
-            assert_eq!(client.next_nonces.borrow().get(&sender).copied(), Some(0));
+            assert_eq!(client.session.borrow().next_nonce(&sender), Some(0));
         }
     }
 }
@@ -2120,21 +2360,19 @@ mod tests {
     }
 
     #[test]
-    fn lookalike_edges_compare_the_first_and_last_six_characters() {
+    fn lookalike_edges_score_the_leading_and_trailing_characters_together() {
         let a = "Q1ABCDEF0000000000000000000000000000000000000000000000UVWXYZ";
-        assert!(shares_edges(
-            a,
-            "Q1ABCDEF1111111111111111111111111111111111111111111111UVWXYZ"
-        ));
+        let with = |head: &str, tail: &str| {
+            let middle = "1".repeat(a.len() - 2 - head.len() - tail.len());
+            format!("Q1{head}{middle}{tail}")
+        };
+        assert!(shares_edges(a, &with("ABCD", "WXYZ")));
+        assert!(shares_edges(a, &with("AB", "UVWXYZ")));
+        assert!(shares_edges(a, &with("ABCDEF", "YZ")));
         assert!(shares_edges(a, &a.to_ascii_lowercase()));
-        assert!(!shares_edges(
-            a,
-            "Q1ABCDEX0000000000000000000000000000000000000000000000UVWXYZ"
-        ));
-        assert!(!shares_edges(
-            a,
-            "Q1ABCDEF0000000000000000000000000000000000000000000000UVWXYQ"
-        ));
+        assert!(!shares_edges(a, &with("ABC", "WXYZ")));
+        assert!(!shares_edges(a, &with("A", "TUVWXYZ")));
+        assert!(!shares_edges(a, &with("ABCDEFG", "Z")));
         assert!(!shares_edges("Q1", "Q1"));
     }
 
@@ -2667,5 +2905,70 @@ mod tests {
                 .is_ok(),
             "acknowledging mainnet lets the same configured client sign"
         );
+    }
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+
+    #[test]
+    fn the_wire_parser_refuses_what_strict_json_refuses() {
+        assert!(json::parse("{\"n\":007}").is_err());
+        assert!(json::parse("{\"n\":0}").is_ok());
+        assert!(json::parse("{\"n\":1.0}").is_err());
+        assert!(json::parse("{\"n\":1e3}").is_err());
+        assert!(json::parse("{\"n\":-1}").is_err());
+        assert!(json::parse("{\"s\":\"a\u{1}b\"}").is_err());
+        assert!(json::parse("{\"s\":\"a\\u0001b\"}").is_ok());
+        assert!(check_gateway_json("\u{feff}{}").is_err());
+    }
+
+    #[test]
+    fn a_gateway_number_string_is_plain_ascii_digits() {
+        assert_eq!(whole_number("500"), Some(500));
+        for bad in ["", "+500", " 500", "500 ", "5_00", "-5", "\u{0665}", "0x10"] {
+            assert_eq!(whole_number(bad), None, "{bad:?}");
+        }
+        let info = |fee: &str| {
+            format!(
+                "{{\"chain_id\":\"c\",\"genesis_hash\":\"g\",\"head_height\":1,\"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"{fee}\"}},\"version\":\"v\"}}"
+            )
+        };
+        assert!(parse_node_info(&info("500")).is_ok());
+        assert!(parse_node_info(&info("+500")).is_err());
+    }
+
+    #[test]
+    fn the_head_bound_follows_the_network_genesis() {
+        let at = TESTNET_GENESIS_SECS + 1_000;
+        let ceiling = head_ceiling(TESTNET_CHAIN_NAME, at);
+        assert_eq!(ceiling, 1_000 * HEAD_BLOCKS_PER_SEC + HEAD_SLACK_BLOCKS);
+        assert!(bounded_valid_until(TESTNET_CHAIN_NAME, ceiling, at, None, 0).is_ok());
+        assert!(bounded_valid_until(TESTNET_CHAIN_NAME, ceiling + 1, at, None, 0).is_err());
+        assert_eq!(
+            head_ceiling(TESTNET_CHAIN_NAME, TESTNET_GENESIS_SECS - 5),
+            HEAD_SLACK_BLOCKS,
+            "a clock before genesis allows only the slack, never an unbounded head"
+        );
+        assert!(bounded_valid_until("Q-dev-net-1", 1_000, at, Some(1_000), 0).is_ok());
+        assert!(bounded_valid_until("Q-dev-net-1", 999, at, Some(1_000), 0).is_err());
+        assert!(bounded_valid_until(
+            "Q-dev-net-1",
+            1_000 + HEAD_SLACK_BLOCKS + 1,
+            at,
+            Some(1_000),
+            0
+        )
+        .is_err());
+        const { assert!(HEAD_SLACK_BLOCKS < DEFAULT_VALIDITY_BLOCKS) };
+    }
+
+    #[test]
+    fn a_phrase_round_trips_through_byte_buffers() {
+        let seed = [9u8; SEED_LEN];
+        let phrase = mnemonic_bytes_from_seed(&seed);
+        assert_eq!(*seed_from_mnemonic_bytes(&phrase).unwrap(), seed);
+        assert!(seed_from_mnemonic_bytes(&[0xff, 0xfe]).is_err());
     }
 }

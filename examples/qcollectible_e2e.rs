@@ -22,6 +22,7 @@ const ORDER_CONTENT_OFF: u64 = 152;
 const ORDER_SCHEME_OFF: u64 = 184;
 const ORDER_PTR_OFF: u64 = 192;
 const ORDER_ID_OFF: u64 = 200;
+const ORDER_EXPIRY_OFF: u64 = 208;
 
 const TRANSFER_TO_OFF: u64 = 120;
 const TRANSFER_ID_OFF: u64 = 152;
@@ -311,6 +312,8 @@ fn mint_call(
         MINT_SELECTOR,
         ORDER_SCHEME_OFF,
         ORDER_PTR_OFF,
+        ORDER_EXPIRY_OFF,
+        order_expiry(),
         qcore::contract::DEFAULT_REGION_OFFSET,
         &[
             FieldArg {
@@ -479,4 +482,12 @@ fn from_hex(s: &str) -> Result<Vec<u8>, String> {
                 .map_err(|_| "the container hex is not hex".to_string())
         })
         .collect()
+}
+
+fn order_expiry() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+        .saturating_add(3600)
 }

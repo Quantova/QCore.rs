@@ -37,7 +37,7 @@ let phrase = qcore::mnemonic_from_seed(&seed);
 
 ## Using it from Rust
 
-The client feature adds a small HTTP transport over the standard library for native callers and for proving the core against a running gateway. The example below reads the fee and the nonce, signs a transfer inside the core, and submits it. The caller passes the highest fee it will accept and the core refuses to sign a fee the gateway reports above it, so a gateway cannot inflate the fee and drain the account. Over this transport the client speaks plaintext only to a loopback node, since without transport security a gateway across an untrusted network could rewrite the fee and the nonce, so reach a remote gateway through a tunnel that ends on loopback.
+The client feature adds a small HTTP transport over the standard library for native callers and for proving the core against a running gateway. The example below reads the fee and the nonce, signs a transfer inside the core, and submits it. The caller passes the highest fee it will accept and the core refuses to sign a fee the gateway reports above it, so a gateway cannot inflate the fee and drain the account. Over this transport the client speaks plaintext only to a loopback node, since without transport security a gateway across an untrusted network could rewrite the fee and the nonce, so reach a remote gateway through a tunnel that ends on loopback. The testnet network names the same https endpoint in every client, and the built in transport has no TLS, so `Client::for_network` refuses it and `Client::for_network_with_transport` opens it over any type that implements `Transport`, for example one built on a TLS library the application already trusts.
 
 ```rust
 use qcore::{Client, account_address, TxStatus};
@@ -50,6 +50,16 @@ let info = client.node_info()?;
 let (signed, outcome) = client.transfer(&seed, 0, &to, 1000, info.transfer_fee)?;
 let status = client.transaction(&signed.tx_id)?;
 ```
+
+## Signing safety
+
+A gateway is not trusted, so the client checks what it reports before it signs. The head height is bounded by the time since the genesis of the named network at the fastest block rate the chain is built for, and the genesis time of each network is one named constant in the core, `TESTNET_GENESIS_SECS`, that the JavaScript and Python clients read through their bindings. A transaction stays valid for three hundred blocks past the head, and a head that falls back or leaps faster than blocks are made is refused.
+
+Each client keeps a signing session. A nonce that was signed once is never signed again with different bytes or with the same bytes until the caller names that nonce, which is how a caller says the first transaction never landed. A gateway that rejects a transaction and then reports a later nonce is refused for the same reason, since the first transaction may still be valid. An order nonce that the gateway raises above the one the session tracked is refused unless the caller names it, because an order stays valid until the contract reaches its nonce. The session lives in memory, so a new process starts with no holds and should name the nonce it expects.
+
+The session also remembers the sending accounts and every target signed for, together with an optional address book passed to `Client::with_address_book`. A target that shares at least two leading and two trailing characters with a known address, eight characters in all, but is a different address is refused as a lookalike.
+
+Numbers the gateway reports are read strictly. An amount or fee string carries only the ASCII digits zero to nine, a count is a JSON integer, and a response that is not strict JSON in UTF-8 is refused. A recovery phrase can be read and written as a byte buffer that the caller wipes, with `mnemonic_bytes_from_seed` and `seed_from_mnemonic_bytes`.
 
 ## Building
 

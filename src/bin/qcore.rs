@@ -97,7 +97,7 @@ fn cmd_register(args: &[String]) -> Result<(), String> {
         );
     }
     let seed = read_seed(&args[1], argv)?;
-    let max_fee: u128 = args[2].parse().map_err(|_| "the max fee is not a number")?;
+    let max_fee = whole_arg::<u128>(&args[2], "the max fee is not a number")?;
     let (_signed, outcome) =
         build_client(&args[0], mainnet, acknowledged, testnet)?.register(&seed, 0, max_fee)?;
     match outcome {
@@ -142,8 +142,8 @@ fn cmd_send(args: &[String]) -> Result<(), String> {
     }
     let seed = read_seed(&args[1], argv)?;
     let to = &args[2];
-    let amount: u64 = args[3].parse().map_err(|_| "the amount is not a number")?;
-    let max_fee: u128 = args[4].parse().map_err(|_| "the max fee is not a number")?;
+    let amount = whole_arg::<u64>(&args[3], "the amount is not a number")?;
+    let max_fee = whole_arg::<u128>(&args[4], "the max fee is not a number")?;
     let (_signed, outcome) = build_client(&args[0], mainnet, acknowledged, testnet)?
         .transfer(&seed, 0, to, amount, max_fee)?;
     match outcome {
@@ -252,6 +252,12 @@ fn build_client(
     })
 }
 
+fn whole_arg<T: TryFrom<u128>>(text: &str, message: &str) -> Result<T, String> {
+    qcore::whole_number(text)
+        .and_then(|n| T::try_from(n).ok())
+        .ok_or_else(|| message.to_string())
+}
+
 fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -318,9 +324,7 @@ fn parse_seed(hex: &str) -> Result<Zeroizing<[u8; 32]>, String> {
 
 fn parse_index(arg: Option<&String>) -> Result<u64, String> {
     match arg {
-        Some(value) => value
-            .parse()
-            .map_err(|_| "the index is not a number".to_string()),
+        Some(value) => whole_arg::<u64>(value, "the index is not a number"),
         None => Ok(0),
     }
 }
@@ -347,6 +351,9 @@ mod seed_tests {
     #[test]
     fn a_seed_with_a_sign_character_is_refused() {
         assert!(parse_seed(&format!("+a{}", "b".repeat(62))).is_err());
+        assert!(whole_arg::<u64>("+5", "x").is_err());
+        assert!(whole_arg::<u64>("18446744073709551616", "x").is_err());
+        assert_eq!(whole_arg::<u64>("5", "x"), Ok(5));
         assert!(parse_seed(&"ab".repeat(32)).is_ok());
     }
 }

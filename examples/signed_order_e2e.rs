@@ -36,7 +36,7 @@ fn run() -> Result<(), String> {
     let step: u64 = args.next().map(|s| s.parse().unwrap_or(5)).unwrap_or(5);
 
     let client = Client::new(url);
-    let layout = OrderLayout::new(120, 128, vec![136]);
+    let layout = OrderLayout::new(120, 128, 144, vec![136], order_expiry());
 
     let info = client.node_info()?;
     let fee = qcore::vm_call_fee(info.transfer_fee, METER);
@@ -268,4 +268,12 @@ fn from_hex(s: &str) -> Result<Vec<u8>, String> {
                 .map_err(|_| "the container hex is not hex".to_string())
         })
         .collect()
+}
+
+fn order_expiry() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+        .saturating_add(3600)
 }

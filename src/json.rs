@@ -251,6 +251,9 @@ impl Parser {
                     Some('u') => s.push(self.unicode_char()?),
                     _ => return Err("bad escape in a string".to_string()),
                 },
+                Some(c) if (c as u32) < 0x20 => {
+                    return Err("a string carries a raw control character".to_string())
+                }
                 Some(c) => s.push(c),
                 None => return Err("a string was not closed".to_string()),
             }
@@ -297,6 +300,14 @@ impl Parser {
             self.next();
         }
         let text: String = self.chars[start..self.pos].iter().collect();
+        if matches!(self.peek(), Some('.' | 'e' | 'E')) {
+            return Err(format!("'{text}' is followed by a fraction or exponent, the wire carries whole numbers only"));
+        }
+        if text.len() > 1 && text.starts_with('0') {
+            return Err(format!(
+                "'{text}' has a leading zero, which JSON does not allow"
+            ));
+        }
         text.parse::<u64>()
             .map(Json::Int)
             .map_err(|_| format!("'{text}' is not a whole number the wire accepts"))

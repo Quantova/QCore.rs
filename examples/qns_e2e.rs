@@ -30,6 +30,7 @@ const TO_OFF: u64 = 112;
 const WITHDRAW_SCHEME_OFF: u64 = 72;
 const WITHDRAW_PTR_OFF: u64 = 80;
 const WITHDRAW_AMOUNT_OFF: u64 = 88;
+const WITHDRAW_EXPIRY_OFF: u64 = 96;
 
 const BASE3_SLOT: u64 = 4;
 const BASE4_SLOT: u64 = 5;
@@ -491,6 +492,8 @@ fn run() -> Result<(), String> {
         WITHDRAW_SELECTOR,
         WITHDRAW_SCHEME_OFF,
         WITHDRAW_PTR_OFF,
+        WITHDRAW_EXPIRY_OFF,
+        order_expiry(),
         region_off,
         &[FieldArg {
             offset: WITHDRAW_AMOUNT_OFF,
@@ -530,6 +533,8 @@ fn run() -> Result<(), String> {
         WITHDRAW_SELECTOR,
         WITHDRAW_SCHEME_OFF,
         WITHDRAW_PTR_OFF,
+        WITHDRAW_EXPIRY_OFF,
+        order_expiry(),
         region_off,
         &[FieldArg {
             offset: WITHDRAW_AMOUNT_OFF,
@@ -779,4 +784,12 @@ fn from_hex(s: &str) -> Result<Vec<u8>, String> {
                 .map_err(|_| "the container hex is not hex".to_string())
         })
         .collect()
+}
+
+fn order_expiry() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+        .saturating_add(3600)
 }
