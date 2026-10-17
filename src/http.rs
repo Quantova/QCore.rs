@@ -172,11 +172,12 @@ fn dechunk(mut data: &[u8]) -> Result<Vec<u8>, String> {
         if size == 0 {
             return Ok(out);
         }
-        if data.len() < size + 2 || &data[size..size + 2] != b"\r\n" {
+        let end = size.checked_add(2).ok_or("a chunk size is out of range")?;
+        if data.len() < end || &data[size..end] != b"\r\n" {
             return Err("a chunk is truncated".to_string());
         }
         out.extend_from_slice(&data[..size]);
-        data = &data[size + 2..];
+        data = &data[end..];
     }
 }
 

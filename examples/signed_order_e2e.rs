@@ -4,7 +4,7 @@
 use std::thread::sleep;
 use std::time::Duration;
 
-use qcore::contract::{event_word, OrderLayout};
+use qcore::contract::{event_word, order_layout_hash, OrderLayout, OrderLayoutField};
 use qcore::{account_address, contract_address, vm_deploy_address, Client, Submit, TxStatus};
 
 const DEPLOYER_SEED: [u8; 32] = [11u8; 32];
@@ -36,7 +36,7 @@ fn run() -> Result<(), String> {
     let step: u64 = args.next().map(|s| s.parse().unwrap_or(5)).unwrap_or(5);
 
     let client = Client::new(url);
-    let layout = OrderLayout::new(120, 128, 144, vec![136], order_expiry());
+    let layout = OrderLayout::new(120, 128, 144, vec![136], order_expiry(), bump_layout());
 
     let info = client.node_info()?;
     let fee = qcore::vm_call_fee(info.transfer_fee, METER);
@@ -276,4 +276,15 @@ fn order_expiry() -> u64 {
         .map(|d| d.as_secs())
         .unwrap_or(0)
         .saturating_add(3600)
+}
+
+fn bump_layout() -> [u8; 32] {
+    order_layout_hash(
+        BUMP_SELECTOR,
+        &[OrderLayoutField {
+            name: "order.step".to_string(),
+            ty: "u64".to_string(),
+            width: 8,
+        }],
+    )
 }

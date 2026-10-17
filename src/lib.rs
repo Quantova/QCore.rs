@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 pub mod contract;
+pub mod finality;
 pub mod json;
 
 #[cfg(feature = "client")]
@@ -1074,6 +1075,13 @@ pub use client::{Client, Transport};
 
 #[cfg(feature = "client")]
 mod client {
+    fn order_clock() -> Result<u64, String> {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .map_err(|_| "the system clock is before 1970".to_string())
+    }
+
     use super::*;
 
     fn order_slot_key(contract: &str, signer: &[u8; 32]) -> String {
@@ -1575,10 +1583,11 @@ mod client {
         }
 
         fn slot_value(&self, contract: &str, key: &[u8; 32]) -> Result<u64, String> {
-            Ok(crate::contract::storage_value(
+            crate::contract::storage_value_reported(
                 &self.storage_at(contract, std::slice::from_ref(key))?,
                 key,
-            ))
+            )
+            .ok_or_else(|| "the gateway did not report the requested storage slot".to_string())
         }
 
         pub fn contract_nonce(&self, contract: &str, signer: &[u8; 32]) -> Result<u64, String> {
@@ -1638,6 +1647,7 @@ mod client {
             if !valid_address(contract) {
                 return Err("the contract is not a Q1 address".to_string());
             }
+            contract::check_order_expiry(layout.expiry, order_clock()?)?;
             let caller = account_address(caller_seed, caller_index);
             self.vet_target(&caller, &[contract])?;
             let info = self.node_info()?;
@@ -1688,6 +1698,7 @@ mod client {
             caller_index: u64,
             contract: &str,
             selector: [u8; 4],
+            layout_hash: &[u8; contract::LAYOUT_HASH_BYTES],
             scheme_off: u64,
             ptr_off: u64,
             expiry_off: u64,
@@ -1706,6 +1717,7 @@ mod client {
                 caller_index,
                 contract,
                 selector,
+                layout_hash,
                 scheme_off,
                 ptr_off,
                 expiry_off,
@@ -1730,6 +1742,7 @@ mod client {
             caller_index: u64,
             contract: &str,
             selector: [u8; 4],
+            layout_hash: &[u8; contract::LAYOUT_HASH_BYTES],
             scheme_off: u64,
             ptr_off: u64,
             expiry_off: u64,
@@ -1751,6 +1764,7 @@ mod client {
             if in_asset.is_some_and(|issuer| !valid_address(issuer)) {
                 return Err("the asset issuer is not a Q1 address".to_string());
             }
+            contract::check_order_expiry(expiry, order_clock()?)?;
             let caller = account_address(caller_seed, caller_index);
             let mut targets = vec![contract];
             targets.extend(in_asset);
@@ -1771,6 +1785,7 @@ mod client {
                 chain_id,
                 contract,
                 selector,
+                layout_hash,
                 scheme_off,
                 ptr_off,
                 expiry_off,

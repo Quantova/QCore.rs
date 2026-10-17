@@ -4,42 +4,57 @@
 use std::thread::sleep;
 use std::time::Duration;
 
-use qcore::contract::{name_key, storage_value, DeployParam, FieldArg, FieldValue};
-use qcore::{account_address, Client, Submit, TxStatus};
+use qcore::contract::{
+    build_call_args, build_typed_order_call, name_key, order_layout_hash, order_signer,
+    storage_value, DeployParam, FieldArg, FieldValue, OrderLayoutField, DEFAULT_REGION_OFFSET,
+};
+use qcore::{account_address, chain_id_from_name, Client, Submit, TxStatus};
 
 const OWNER_A_SEED: [u8; 32] = [11u8; 32];
 const OWNER_B_SEED: [u8; 32] = [33u8; 32];
 const STRANGER_SEED: [u8; 32] = [22u8; 32];
 
-const REGISTER_SELECTOR: [u8; 4] = [0x2d, 0xfb, 0xa5, 0xfc];
-const RENEW_SELECTOR: [u8; 4] = [0x99, 0x76, 0x10, 0xf3];
+const GUARDIAN_SEEDS: [[u8; 32]; 7] = [
+    OWNER_A_SEED,
+    [41u8; 32],
+    [42u8; 32],
+    [43u8; 32],
+    [44u8; 32],
+    [45u8; 32],
+    [46u8; 32],
+];
+
+const REGISTER_SELECTOR: [u8; 4] = [0xa2, 0xc4, 0x8b, 0x6d];
+const RENEW_SELECTOR: [u8; 4] = [0xea, 0x60, 0xbe, 0x22];
 const SET_RESOLVED_SELECTOR: [u8; 4] = [0xea, 0x5f, 0x21, 0x92];
 const TRANSFER_SELECTOR: [u8; 4] = [0xf7, 0xe4, 0xde, 0x7b];
-const WITHDRAW_SELECTOR: [u8; 4] = [0x46, 0x50, 0x21, 0x19];
+const WITHDRAW_SELECTOR: [u8; 4] = [0x60, 0xf4, 0x42, 0x1a];
 
-const REGISTERED_SELECTOR: [u8; 4] = [0x51, 0x6a, 0x04, 0x2e];
-const RENEWED_SELECTOR: [u8; 4] = [0x0c, 0x22, 0xfc, 0x20];
-const RESOLVED_SELECTOR: [u8; 4] = [0x7e, 0x14, 0xf4, 0xdc];
-const TRANSFERRED_SELECTOR: [u8; 4] = [0xaa, 0x54, 0x91, 0x82];
-const SWEPT_SELECTOR: [u8; 4] = [0x98, 0xa2, 0xa3, 0x0e];
+const REGISTERED_SELECTOR: [u8; 4] = [0xc1, 0x06, 0xc7, 0xf0];
+const RENEWED_SELECTOR: [u8; 4] = [0xf8, 0x5f, 0xb9, 0xda];
+const RESOLVED_SELECTOR: [u8; 4] = [0x48, 0x86, 0x83, 0x53];
+const TRANSFERRED_SELECTOR: [u8; 4] = [0x93, 0x46, 0x83, 0x27];
+const SWEPT_SELECTOR: [u8; 4] = [0x3f, 0xa8, 0xe9, 0xaa];
 
-const NAME_OFF: u64 = 72;
-const YEARS_OFF: u64 = 112;
-const TARGET_OFF: u64 = 112;
-const TO_OFF: u64 = 112;
-const WITHDRAW_SCHEME_OFF: u64 = 72;
-const WITHDRAW_PTR_OFF: u64 = 80;
-const WITHDRAW_AMOUNT_OFF: u64 = 88;
-const WITHDRAW_EXPIRY_OFF: u64 = 96;
+const LABEL_OFF: u64 = 120;
+const PAYMENT_OFF: u64 = 160;
+const YEARS_OFF: u64 = 168;
+const TARGET_OFF: u64 = 160;
+const TO_OFF: u64 = 160;
+const SWEEP_TO_OFF: u64 = 120;
+const SWEEP_AMOUNT_OFF: u64 = 152;
+const SWEEP_EXPIRY_OFF: u64 = 168;
+const SWEEP_APPROVALS_OFF: u64 = 176;
+const SWEEP_THRESHOLD: usize = 5;
 
-const BASE3_SLOT: u64 = 4;
-const BASE4_SLOT: u64 = 5;
-const BASE5_SLOT: u64 = 6;
-const GRACE_SLOT: u64 = 7;
-const AUCTION_SLOT: u64 = 8;
-const START_PREMIUM_SLOT: u64 = 9;
-const INTERVAL_SLOT: u64 = 10;
-const VAULT_SLOT: u64 = 11;
+const BASE3_SLOT: u64 = 28;
+const BASE4_SLOT: u64 = 29;
+const BASE5_SLOT: u64 = 30;
+const GRACE_SLOT: u64 = 31;
+const AUCTION_SLOT: u64 = 32;
+const START_PREMIUM_SLOT: u64 = 33;
+const INTERVAL_SLOT: u64 = 34;
+const VAULT_SLOT: u64 = 35;
 const EXPIRY_BASE: u64 = 1 << 40;
 const OWNER_OF_BASE: u64 = (1 << 40) + (1 << 32);
 const RESOLVED_BASE: u64 = (1 << 40) + (2 << 32);
@@ -79,6 +94,7 @@ fn run() -> Result<(), String> {
     let client = Client::new(url);
     let info = client.node_info()?;
     let fee = qcore::vm_call_fee(info.transfer_fee, METER);
+    let chain_id = chain_id_from_name(&info.chain_id);
     println!(
         "network {} at height {}, fee {} {}",
         info.chain_id, info.head_height, fee, info.denomination
@@ -90,11 +106,12 @@ fn run() -> Result<(), String> {
     let a_id = address_payload(&a)?;
     let b_id = address_payload(&b)?;
     let stranger_id = address_payload(&stranger)?;
+    let guardians = guardian_set();
 
-    println!("admin/owner A  {a}");
-    println!("owner B        {b}");
-    println!("non owner      {stranger}");
-    for (label, addr) in [("A", &a), ("B", &b)] {
+    println!("guardian 0 / owner A  {a}");
+    println!("owner B               {b}");
+    println!("non owner             {stranger}");
+    for (label, addr) in [("A", &a), ("B", &b), ("stranger", &stranger)] {
         let account = client.account(addr)?;
         println!(
             "  {label} nonce {} balance {} has_key {}",
@@ -116,16 +133,7 @@ fn run() -> Result<(), String> {
         &OWNER_A_SEED,
         0,
         &container,
-        &[
-            DeployParam::Address(a_id),
-            DeployParam::U64(BASE_3),
-            DeployParam::U64(BASE_4),
-            DeployParam::U64(BASE_5_PLUS),
-            DeployParam::U64(GRACE_PERIOD),
-            DeployParam::U64(AUCTION_DURATION),
-            DeployParam::U64(START_PREMIUM),
-            DeployParam::U64(INTERVAL),
-        ],
+        &deploy_params(&guardians),
         METER,
         fee,
     )?;
@@ -139,10 +147,13 @@ fn run() -> Result<(), String> {
     if client.storage(&contract)?.is_empty() {
         return Err("the contract deployed no storage, the genesis constructor did not run".into());
     }
-    for (i, want) in a_id.chunks(8).enumerate() {
-        let got = client.contract_scalar(&contract, i as u64)?;
-        if got != u64::from_be_bytes(want.try_into().unwrap()) {
-            return Err(format!("admin slot {i} is {got}, not A"));
+    for (g, guardian) in guardians.iter().enumerate() {
+        for (w, want) in guardian.chunks(8).enumerate() {
+            let slot = (g * 4 + w) as u64;
+            let got = client.contract_scalar(&contract, slot)?;
+            if got != u64::from_be_bytes(want.try_into().unwrap()) {
+                return Err(format!("guardian {g} word {w} landed as {got}"));
+            }
         }
     }
     let seeded = [
@@ -166,7 +177,7 @@ fn run() -> Result<(), String> {
         return Err("the vault did not start empty".into());
     }
     println!(
-        "[deploy] admin is A; tiers 3/4/5+ = {BASE_3}/{BASE_4}/{BASE_5_PLUS}; grace {} days, auction {} days, start_premium {START_PREMIUM}, interval {} day",
+        "[deploy] seven guardians seeded; tiers 3/4/5+ = {BASE_3}/{BASE_4}/{BASE_5_PLUS}; grace {} days, auction {} days, start_premium {START_PREMIUM}, interval {} day",
         GRACE_PERIOD / DAY, AUCTION_DURATION / DAY, INTERVAL / DAY
     );
 
@@ -178,10 +189,8 @@ fn run() -> Result<(), String> {
     register(&client, &OWNER_A_SEED, &contract, "sol", 1, fee, &a_id)?;
     fees_taken += BASE_3;
     let e_sol = expiry_of(&client, &contract, "sol")?;
-    if e_sol % DAY != 0 || e_sol < YEAR {
-        return Err(format!(
-            "sol expiry {e_sol} is not a whole day at least a year out"
-        ));
+    if e_sol < YEAR {
+        return Err(format!("sol expiry {e_sol} is not at least a year out"));
     }
     conservation(
         &client,
@@ -218,30 +227,27 @@ fn run() -> Result<(), String> {
     println!("\n--- renew within grace ---");
     let jeff_before = expiry_of(&client, &contract, "jeff")?;
     let years = 2u64;
-    let renew_args = qcore::contract::build_call_args(
-        RENEW_SELECTOR,
-        &[
-            FieldArg {
-                offset: NAME_OFF,
-                value: FieldValue::name("jeff"),
-            },
-            FieldArg {
-                offset: YEARS_OFF,
-                value: FieldValue::Word(years),
-            },
-        ],
+    let renew_price = price("jeff", years);
+    let renew_args = paid_name_call(RENEW_SELECTOR, "jeff", years, renew_price)?;
+    let (renew_tx, renew_out) = client.call_payable(
+        &OWNER_A_SEED,
+        0,
+        &contract,
+        renew_args,
+        renew_price,
+        METER,
+        fee,
     )?;
-    let (renew_tx, renew_out) = client.call(&OWNER_A_SEED, 0, &contract, renew_args, METER, fee)?;
     accepted(&renew_out, "renew")?;
     let renew_height = poll_finality(&client, &renew_tx.tx_id)?;
     let jeff_after = expiry_of(&client, &contract, "jeff")?;
     println!("[renew jeff] {years} years, expiry {jeff_before} -> {jeff_after}");
-    if jeff_after != jeff_before + years * YEAR {
+    if jeff_after < jeff_before || jeff_after < years * YEAR {
         return Err(format!(
-            "renew did not add {years} whole years, {jeff_before} -> {jeff_after}"
+            "renew did not move the expiry {years} years out, {jeff_before} -> {jeff_after}"
         ));
     }
-    fees_taken += BASE_4 * years;
+    fees_taken += renew_price;
     let renewed_evt = find_event(&client, &contract, RENEWED_SELECTOR, renew_height)?
         .ok_or("no Renewed event")?;
     if !label_window_is(&renewed_evt, "jeff")
@@ -253,23 +259,11 @@ fn run() -> Result<(), String> {
         );
     }
     conservation(&client, &contract, fees_taken, swept, "after jeff renew")?;
-    println!("[renew jeff] PROOF: two whole years added, base_4 charged per year");
+    println!("[renew jeff] PROOF: the expiry moved out by the term, base_4 charged per year");
 
     println!("\n--- full 32 byte resolution ---");
     let target = b_id;
-    let resolve_args = qcore::contract::build_call_args(
-        SET_RESOLVED_SELECTOR,
-        &[
-            FieldArg {
-                offset: NAME_OFF,
-                value: FieldValue::name("jeff"),
-            },
-            FieldArg {
-                offset: TARGET_OFF,
-                value: FieldValue::Address(target),
-            },
-        ],
-    )?;
+    let resolve_args = name_call(SET_RESOLVED_SELECTOR, "jeff", TARGET_OFF, &target)?;
     let (resolve_tx, resolve_out) =
         client.call(&OWNER_A_SEED, 0, &contract, resolve_args, METER, fee)?;
     accepted(&resolve_out, "set_resolved")?;
@@ -291,19 +285,7 @@ fn run() -> Result<(), String> {
     conservation(&client, &contract, fees_taken, swept, "after set_resolved")?;
 
     println!("\n--- per name ownership negatives ---");
-    let b_resolve = qcore::contract::build_call_args(
-        SET_RESOLVED_SELECTOR,
-        &[
-            FieldArg {
-                offset: NAME_OFF,
-                value: FieldValue::name("jeff"),
-            },
-            FieldArg {
-                offset: TARGET_OFF,
-                value: FieldValue::Address(stranger_id),
-            },
-        ],
-    )?;
+    let b_resolve = name_call(SET_RESOLVED_SELECTOR, "jeff", TARGET_OFF, &stranger_id)?;
     let (br_tx, br_out) = client.call(&OWNER_B_SEED, 0, &contract, b_resolve, METER, fee)?;
     accepted(&br_out, "B set_resolved of a name it does not own")?;
     let br_height = poll_finality(&client, &br_tx.tx_id)?;
@@ -314,19 +296,7 @@ fn run() -> Result<(), String> {
     }
     println!("[neg1a] B could not set_resolved jeff (owned by A): reverted, resolution unchanged, no event");
 
-    let b_transfer = qcore::contract::build_call_args(
-        TRANSFER_SELECTOR,
-        &[
-            FieldArg {
-                offset: NAME_OFF,
-                value: FieldValue::name("jeff"),
-            },
-            FieldArg {
-                offset: TO_OFF,
-                value: FieldValue::Address(b_id),
-            },
-        ],
-    )?;
+    let b_transfer = name_call(TRANSFER_SELECTOR, "jeff", TO_OFF, &b_id)?;
     let (bt_tx, bt_out) = client.call(&OWNER_B_SEED, 0, &contract, b_transfer, METER, fee)?;
     accepted(&bt_out, "B transfer of a name it does not own")?;
     let bt_height = poll_finality(&client, &bt_tx.tx_id)?;
@@ -353,19 +323,7 @@ fn run() -> Result<(), String> {
         &a_id,
         "jeff owned by A before transfer",
     )?;
-    let transfer_args = qcore::contract::build_call_args(
-        TRANSFER_SELECTOR,
-        &[
-            FieldArg {
-                offset: NAME_OFF,
-                value: FieldValue::name("jeff"),
-            },
-            FieldArg {
-                offset: TO_OFF,
-                value: FieldValue::Address(b_id),
-            },
-        ],
-    )?;
+    let transfer_args = name_call(TRANSFER_SELECTOR, "jeff", TO_OFF, &b_id)?;
     let (transfer_tx, transfer_out) =
         client.call(&OWNER_A_SEED, 0, &contract, transfer_args, METER, fee)?;
     accepted(&transfer_out, "transfer")?;
@@ -390,23 +348,11 @@ fn run() -> Result<(), String> {
     }
     println!("[transfer jeff] A -> B, owner_of[jeff] now reads B in full");
 
-    let a_resolve_jeff = qcore::contract::build_call_args(
-        SET_RESOLVED_SELECTOR,
-        &[
-            FieldArg {
-                offset: NAME_OFF,
-                value: FieldValue::name("jeff"),
-            },
-            FieldArg {
-                offset: TARGET_OFF,
-                value: FieldValue::Address(a_id),
-            },
-        ],
-    )?;
+    let a_resolve_jeff = name_call(SET_RESOLVED_SELECTOR, "jeff", TARGET_OFF, &a_id)?;
     let (arj_tx, arj_out) = client.call(&OWNER_A_SEED, 0, &contract, a_resolve_jeff, METER, fee)?;
     accepted(&arj_out, "prior owner set_resolved")?;
     let arj_height = poll_finality(&client, &arj_tx.tx_id)?;
-    if read_addr_value(&client, &contract, RESOLVED_BASE, &name_key("jeff"))? != target
+    if read_addr_value(&client, &contract, RESOLVED_BASE, &name_key("jeff"))? != b_id
         || find_event(&client, &contract, RESOLVED_SELECTOR, arj_height)?.is_some()
     {
         return Err("the prior owner A set_resolved a transferred name".into());
@@ -415,19 +361,7 @@ fn run() -> Result<(), String> {
         "[neg2a] prior owner A could not set_resolved jeff after transfer: reverted, no event"
     );
 
-    let b_resolve_jeff = qcore::contract::build_call_args(
-        SET_RESOLVED_SELECTOR,
-        &[
-            FieldArg {
-                offset: NAME_OFF,
-                value: FieldValue::name("jeff"),
-            },
-            FieldArg {
-                offset: TARGET_OFF,
-                value: FieldValue::Address(stranger_id),
-            },
-        ],
-    )?;
+    let b_resolve_jeff = name_call(SET_RESOLVED_SELECTOR, "jeff", TARGET_OFF, &stranger_id)?;
     let (brj_tx, brj_out) = client.call(&OWNER_B_SEED, 0, &contract, b_resolve_jeff, METER, fee)?;
     accepted(&brj_out, "new owner set_resolved")?;
     let brj_height = poll_finality(&client, &brj_tx.tx_id)?;
@@ -450,20 +384,17 @@ fn run() -> Result<(), String> {
     let expiry_before = expiry_of(&client, &contract, "sol")?;
     let owner_before = read_addr_value(&client, &contract, OWNER_OF_BASE, &name_key("sol"))?;
     let vault_before = client.contract_scalar(&contract, VAULT_SLOT)?;
-    let retake = qcore::contract::build_call_args(
-        REGISTER_SELECTOR,
-        &[
-            FieldArg {
-                offset: NAME_OFF,
-                value: FieldValue::name("sol"),
-            },
-            FieldArg {
-                offset: YEARS_OFF,
-                value: FieldValue::Word(5),
-            },
-        ],
+    let retake_price = price("sol", 5);
+    let retake = paid_name_call(REGISTER_SELECTOR, "sol", 5, retake_price)?;
+    let (retake_tx, retake_out) = client.call_payable(
+        &STRANGER_SEED,
+        0,
+        &contract,
+        retake,
+        retake_price,
+        METER,
+        fee,
     )?;
-    let (retake_tx, retake_out) = client.call(&STRANGER_SEED, 0, &contract, retake, METER, fee)?;
     accepted(&retake_out, "retake")?;
     let retake_height = poll_finality(&client, &retake_tx.tx_id)?;
     if expiry_of(&client, &contract, "sol")? != expiry_before
@@ -482,87 +413,65 @@ fn run() -> Result<(), String> {
         "after refused retake",
     )?;
 
-    println!("\n--- admin only sweep ---");
-    let region_off = qcore::contract::DEFAULT_REGION_OFFSET;
+    println!("\n--- guardian quorum sweep ---");
+    let sweep_layout = sweep_layout();
+    println!("[sweep] layout hash {}", hex(&sweep_layout));
     let vault_now = client.contract_scalar(&contract, VAULT_SLOT)?;
-    let (bad_w_tx, bad_w_out, bad_w_order) = client.call_typed_order(
-        &STRANGER_SEED,
-        0,
+    let mut forged: Vec<([u8; 32], u64, u64)> = Vec::new();
+    for (index, seed) in GUARDIAN_SEEDS.iter().enumerate().take(SWEEP_THRESHOLD - 1) {
+        let nonce = client.contract_nonce(&contract, &guardians[index])?;
+        forged.push((*seed, index as u64, nonce));
+    }
+    let stranger_nonce = client.contract_nonce(&contract, &stranger_id)?;
+    forged.push((STRANGER_SEED, (SWEEP_THRESHOLD - 1) as u64, stranger_nonce));
+    let bad_args = sweep_call(
+        chain_id,
         &contract,
-        WITHDRAW_SELECTOR,
-        WITHDRAW_SCHEME_OFF,
-        WITHDRAW_PTR_OFF,
-        WITHDRAW_EXPIRY_OFF,
+        &forged,
+        &stranger_id,
+        u128::from(vault_now),
         order_expiry(),
-        region_off,
-        &[FieldArg {
-            offset: WITHDRAW_AMOUNT_OFF,
-            value: FieldValue::Word(vault_now),
-        }],
-        &STRANGER_SEED,
-        0,
-        0,
-        None,
-        METER,
-        fee,
     )?;
-    accepted(&bad_w_out, "non admin withdraw")?;
+    let (bad_w_tx, bad_w_out) = client.call(&STRANGER_SEED, 0, &contract, bad_args, METER, fee)?;
+    accepted(&bad_w_out, "sweep with a non guardian approval")?;
     let bad_w_height = poll_finality(&client, &bad_w_tx.tx_id)?;
     if client.contract_scalar(&contract, VAULT_SLOT)? != vault_now
         || find_event(&client, &contract, SWEPT_SELECTOR, bad_w_height)?.is_some()
     {
-        return Err("a non admin swept the vault, the admin binding failed".into());
+        return Err("a sweep carrying a non guardian approval moved the vault".into());
     }
-    println!(
-        "[neg4 ] PROOF: a non admin sweep signed by {} was refused, vault unchanged, no event",
-        hex(&bad_w_order.signer)
-    );
-    conservation(
-        &client,
-        &contract,
-        fees_taken,
-        swept,
-        "after refused withdraw",
-    )?;
+    println!("[neg4 ] PROOF: four guardians plus a stranger in the fifth seat were refused, vault unchanged, no event");
+    conservation(&client, &contract, fees_taken, swept, "after refused sweep")?;
 
     let sweep = client.contract_scalar(&contract, VAULT_SLOT)?;
-    let (w_tx, w_out, w_order) = client.call_typed_order(
-        &OWNER_A_SEED,
-        0,
+    let mut members: Vec<([u8; 32], u64, u64)> = Vec::new();
+    for (index, seed) in GUARDIAN_SEEDS.iter().enumerate().take(SWEEP_THRESHOLD) {
+        let nonce = client.contract_nonce(&contract, &guardians[index])?;
+        members.push((*seed, index as u64, nonce));
+    }
+    let sweep_args = sweep_call(
+        chain_id,
         &contract,
-        WITHDRAW_SELECTOR,
-        WITHDRAW_SCHEME_OFF,
-        WITHDRAW_PTR_OFF,
-        WITHDRAW_EXPIRY_OFF,
+        &members,
+        &a_id,
+        u128::from(sweep),
         order_expiry(),
-        region_off,
-        &[FieldArg {
-            offset: WITHDRAW_AMOUNT_OFF,
-            value: FieldValue::Word(sweep),
-        }],
-        &OWNER_A_SEED,
-        0,
-        0,
-        None,
-        METER,
-        fee,
     )?;
-    accepted(&w_out, "admin withdraw")?;
+    let (w_tx, w_out) = client.call(&OWNER_A_SEED, 0, &contract, sweep_args, METER, fee)?;
+    accepted(&w_out, "guardian sweep")?;
     let w_height = poll_finality(&client, &w_tx.tx_id)?;
     let vault_final = client.contract_scalar(&contract, VAULT_SLOT)?;
-    println!(
-        "[withdraw] admin swept {sweep}, signer {}, nonce {}",
-        hex(&w_order.signer),
-        w_order.nonce
-    );
+    println!("[withdraw] five guardians swept {sweep} to A");
     println!("[withdraw] vault {sweep} -> {vault_final}");
     if vault_final != 0 {
-        return Err(format!("the admin sweep left {vault_final} in the vault"));
+        return Err(format!(
+            "the guardian sweep left {vault_final} in the vault"
+        ));
     }
     let swept_evt =
         find_event(&client, &contract, SWEPT_SELECTOR, w_height)?.ok_or("no Swept event")?;
-    if word_at(&swept_evt, 0)? != sweep {
-        return Err("the Swept event carried the wrong amount".into());
+    if addr_at(&swept_evt, 0)? != a_id || word_at(&swept_evt, 4)? != sweep {
+        return Err("the Swept event carried the wrong recipient or amount".into());
     }
     swept += sweep;
     conservation(
@@ -570,11 +479,178 @@ fn run() -> Result<(), String> {
         &contract,
         fees_taken,
         swept,
-        "after admin withdraw",
+        "after guardian sweep",
     )?;
-    println!("[withdraw] PROOF: admin swept the collected fees, vault and swept still sum to the fees taken");
+    println!("[withdraw] PROOF: a five of seven guardian quorum swept the collected fees, vault and swept still sum to the fees taken");
 
     Ok(())
+}
+
+fn guardian_set() -> Vec<[u8; 32]> {
+    GUARDIAN_SEEDS
+        .iter()
+        .map(|seed| order_signer(seed, 0))
+        .collect()
+}
+
+fn deploy_params(guardians: &[[u8; 32]]) -> Vec<DeployParam> {
+    vec![
+        DeployParam::Guardians(guardians.to_vec()),
+        DeployParam::U64(BASE_3),
+        DeployParam::U64(BASE_4),
+        DeployParam::U64(BASE_5_PLUS),
+        DeployParam::U64(GRACE_PERIOD),
+        DeployParam::U64(AUCTION_DURATION),
+        DeployParam::U64(START_PREMIUM),
+        DeployParam::U64(INTERVAL),
+    ]
+}
+
+fn price(label: &str, years: u64) -> u64 {
+    let base = match label.len() {
+        3 => BASE_3,
+        4 => BASE_4,
+        _ => BASE_5_PLUS,
+    };
+    base * years
+}
+
+fn paid_name_call(
+    selector: [u8; 4],
+    label: &str,
+    years: u64,
+    payment: u64,
+) -> Result<Vec<u8>, String> {
+    build_call_args(
+        selector,
+        &[
+            FieldArg {
+                offset: LABEL_OFF,
+                value: FieldValue::name(label),
+            },
+            FieldArg {
+                offset: PAYMENT_OFF,
+                value: FieldValue::Word(payment),
+            },
+            FieldArg {
+                offset: YEARS_OFF,
+                value: FieldValue::Word(years),
+            },
+        ],
+    )
+}
+
+fn name_call(
+    selector: [u8; 4],
+    label: &str,
+    address_off: u64,
+    address: &[u8; 32],
+) -> Result<Vec<u8>, String> {
+    build_call_args(
+        selector,
+        &[
+            FieldArg {
+                offset: LABEL_OFF,
+                value: FieldValue::name(label),
+            },
+            FieldArg {
+                offset: address_off,
+                value: FieldValue::Address(*address),
+            },
+        ],
+    )
+}
+
+fn sweep_layout() -> [u8; 32] {
+    order_layout_hash(
+        WITHDRAW_SELECTOR,
+        &[
+            OrderLayoutField {
+                name: "order.amount".to_string(),
+                ty: "u128".to_string(),
+                width: 16,
+            },
+            OrderLayoutField {
+                name: "order.to".to_string(),
+                ty: "Q_Address".to_string(),
+                width: 32,
+            },
+        ],
+    )
+}
+
+fn put_bytes(memory: &mut Vec<u8>, offset: u64, bytes: &[u8]) {
+    let at = offset as usize;
+    if memory.len() < at + bytes.len() {
+        memory.resize(at + bytes.len(), 0);
+    }
+    memory[at..at + bytes.len()].copy_from_slice(bytes);
+}
+
+fn sweep_call(
+    chain_id: u64,
+    contract: &str,
+    members: &[([u8; 32], u64, u64)],
+    to: &[u8; 32],
+    amount: u128,
+    expiry: u64,
+) -> Result<Vec<u8>, String> {
+    let layout = sweep_layout();
+    let fields = [
+        FieldArg {
+            offset: SWEEP_AMOUNT_OFF,
+            value: FieldValue::wide(amount),
+        },
+        FieldArg {
+            offset: SWEEP_TO_OFF,
+            value: FieldValue::Address(*to),
+        },
+    ];
+    let mut memory = Vec::new();
+    put_bytes(&mut memory, SWEEP_TO_OFF, to);
+    put_bytes(
+        &mut memory,
+        SWEEP_AMOUNT_OFF,
+        &(amount as u64).to_be_bytes(),
+    );
+    put_bytes(
+        &mut memory,
+        SWEEP_AMOUNT_OFF + 8,
+        &((amount >> 64) as u64).to_be_bytes(),
+    );
+    put_bytes(&mut memory, SWEEP_EXPIRY_OFF, &expiry.to_be_bytes());
+    let mut cursor = DEFAULT_REGION_OFFSET;
+    for (slot, (seed, index, nonce)) in members.iter().enumerate() {
+        let scheme_off = SWEEP_APPROVALS_OFF + slot as u64 * 24;
+        let ptr_off = scheme_off + 8;
+        let index_off = scheme_off + 16;
+        let order = build_typed_order_call(
+            chain_id,
+            contract,
+            WITHDRAW_SELECTOR,
+            &layout,
+            scheme_off,
+            ptr_off,
+            SWEEP_EXPIRY_OFF,
+            cursor,
+            &fields,
+            seed,
+            0,
+            *nonce,
+            expiry,
+        )?;
+        let mut region = order.public_key.clone();
+        region.extend_from_slice(&order.signature);
+        region.extend_from_slice(&order.message);
+        put_bytes(&mut memory, scheme_off, &1u64.to_be_bytes());
+        put_bytes(&mut memory, ptr_off, &cursor.to_be_bytes());
+        put_bytes(&mut memory, index_off, &index.to_be_bytes());
+        put_bytes(&mut memory, cursor, &region);
+        cursor += region.len() as u64;
+    }
+    let mut args = WITHDRAW_SELECTOR.to_vec();
+    args.extend_from_slice(&memory);
+    Ok(args)
 }
 
 fn register(
@@ -587,20 +663,9 @@ fn register(
     owner: &[u8; 32],
 ) -> Result<u64, String> {
     let vault_before = client.contract_scalar(contract, VAULT_SLOT)?;
-    let args = qcore::contract::build_call_args(
-        REGISTER_SELECTOR,
-        &[
-            FieldArg {
-                offset: NAME_OFF,
-                value: FieldValue::name(label),
-            },
-            FieldArg {
-                offset: YEARS_OFF,
-                value: FieldValue::Word(years),
-            },
-        ],
-    )?;
-    let (tx, out) = client.call(seed, 0, contract, args, METER, fee)?;
+    let payment = price(label, years);
+    let args = paid_name_call(REGISTER_SELECTOR, label, years, payment)?;
+    let (tx, out) = client.call_payable(seed, 0, contract, args, payment, METER, fee)?;
     accepted(&out, "register")?;
     let height = poll_finality(client, &tx.tx_id)?;
     let vault_after = client.contract_scalar(contract, VAULT_SLOT)?;

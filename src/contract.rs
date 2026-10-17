@@ -11,7 +11,10 @@ pub const CONTRACT_CONTEXT_BYTES: u64 = 120;
 
 const WORD: u64 = 8;
 
-const SIGNED_MSG_TAG: &[u8; 8] = b"QTVSGN02";
+const SIGNED_MSG_TAG: &[u8; 8] = b"QTVSGN03";
+const ORDER_LAYOUT_TAG: &[u8; 8] = b"QTVLAYT1";
+
+pub const LAYOUT_HASH_BYTES: usize = 32;
 const NONCE_TAG: &[u8; 8] = b"QTVNONCE";
 
 const MSG_TAG_OFF: usize = 0;
@@ -21,7 +24,8 @@ const MSG_SELECTOR_OFF: usize = 48;
 const MSG_SIGNER_OFF: usize = 56;
 const MSG_NONCE_OFF: usize = 88;
 const MSG_EXPIRY_OFF: usize = 96;
-const MSG_FIELDS_OFF: usize = 104;
+const MSG_LAYOUT_OFF: usize = 104;
+const MSG_FIELDS_OFF: usize = 136;
 
 pub const DEFAULT_REGION_OFFSET: u64 = 8192;
 
@@ -146,6 +150,36 @@ pub fn id_key(id: u64) -> [u8; 32] {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderLayoutField {
+    pub name: String,
+    pub ty: String,
+    pub width: u64,
+}
+
+pub fn order_layout_hash(
+    selector: [u8; 4],
+    fields: &[OrderLayoutField],
+) -> [u8; LAYOUT_HASH_BYTES] {
+    let mut pre = ORDER_LAYOUT_TAG.to_vec();
+    pre.extend_from_slice(&selector);
+    pre.extend_from_slice(&(fields.len() as u32).to_be_bytes());
+    for field in fields {
+        pre.extend_from_slice(&(field.name.len() as u32).to_be_bytes());
+        pre.extend_from_slice(field.name.as_bytes());
+        pre.extend_from_slice(&(field.ty.len() as u32).to_be_bytes());
+        pre.extend_from_slice(field.ty.as_bytes());
+        pre.extend_from_slice(&field.width.to_be_bytes());
+    }
+    sha3::sha3_256(&pre)
+}
+
+pub fn layout_hash_from_hex(hex: &str) -> Result<[u8; LAYOUT_HASH_BYTES], String> {
+    crate::json::from_hex(hex)?
+        .try_into()
+        .map_err(|_| "the layout hash is 32 bytes of hex".to_string())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldArg {
     pub offset: u64,
     pub value: FieldValue,
@@ -159,6 +193,7 @@ pub fn canonical_order_message_typed(
     signer: &[u8; 32],
     nonce: u64,
     expiry: u64,
+    layout_hash: &[u8; LAYOUT_HASH_BYTES],
     fields: &[FieldValue],
 ) -> Vec<u8> {
     let mut msg = Vec::with_capacity(MSG_FIELDS_OFF);
@@ -176,6 +211,8 @@ pub fn canonical_order_message_typed(
     msg.extend_from_slice(&nonce.to_be_bytes());
     debug_assert_eq!(msg.len(), MSG_EXPIRY_OFF);
     msg.extend_from_slice(&expiry.to_be_bytes());
+    debug_assert_eq!(msg.len(), MSG_LAYOUT_OFF);
+    msg.extend_from_slice(layout_hash);
     debug_assert_eq!(msg.len(), MSG_FIELDS_OFF);
     for field in fields {
         msg.extend_from_slice(&field.bytes());
@@ -191,6 +228,7 @@ pub fn canonical_order_message(
     signer: &[u8; 32],
     nonce: u64,
     expiry: u64,
+    layout_hash: &[u8; LAYOUT_HASH_BYTES],
     fields: &[u64],
 ) -> Vec<u8> {
     let typed: Vec<FieldValue> = fields.iter().copied().map(FieldValue::Word).collect();
@@ -201,6 +239,7 @@ pub fn canonical_order_message(
         signer,
         nonce,
         expiry,
+        layout_hash,
         &typed,
     )
 }
@@ -213,6 +252,7 @@ pub struct OrderLayout {
     pub field_offs: Vec<u64>,
     pub region_off: u64,
     pub expiry: u64,
+    pub layout_hash: [u8; LAYOUT_HASH_BYTES],
 }
 
 impl OrderLayout {
@@ -222,6 +262,7 @@ impl OrderLayout {
         expiry_off: u64,
         field_offs: Vec<u64>,
         expiry: u64,
+        layout_hash: [u8; LAYOUT_HASH_BYTES],
     ) -> OrderLayout {
         OrderLayout {
             scheme_off,
@@ -230,6 +271,7 @@ impl OrderLayout {
             field_offs,
             region_off: DEFAULT_REGION_OFFSET,
             expiry,
+            layout_hash,
         }
     }
 }
@@ -280,6 +322,7 @@ pub fn build_order_from_typed(
     chain_id: u64,
     contract: &str,
     selector: [u8; 4],
+    layout_hash: &[u8; LAYOUT_HASH_BYTES],
     scheme_off: u64,
     ptr_off: u64,
     expiry_off: u64,
@@ -303,6 +346,7 @@ pub fn build_order_from_typed(
         chain_id,
         contract,
         selector,
+        layout_hash,
         scheme_off,
         ptr_off,
         expiry_off,
@@ -345,6 +389,7 @@ pub fn build_signed_order_call(
         chain_id,
         contract,
         selector,
+        &layout.layout_hash,
         layout.scheme_off,
         layout.ptr_off,
         layout.expiry_off,
@@ -362,6 +407,7 @@ pub fn build_typed_order_call(
     chain_id: u64,
     contract: &str,
     selector: [u8; 4],
+    layout_hash: &[u8; LAYOUT_HASH_BYTES],
     scheme_off: u64,
     ptr_off: u64,
     expiry_off: u64,
@@ -378,6 +424,9 @@ pub fn build_typed_order_call(
         region_off
     };
     let contract_id = contract_id(contract)?;
+    if expiry == 0 {
+        return Err("the order expiry must be set".to_string());
+    }
     if scheme_off < CONTRACT_CONTEXT_BYTES
         || ptr_off < CONTRACT_CONTEXT_BYTES
         || expiry_off < CONTRACT_CONTEXT_BYTES
@@ -413,6 +462,7 @@ pub fn build_typed_order_call(
         &signer,
         nonce,
         expiry,
+        layout_hash,
         &values,
     );
 
@@ -725,6 +775,25 @@ pub fn parse_storage(response: &str) -> Result<Vec<StorageSlot>, String> {
     Ok(slots)
 }
 
+pub fn storage_value_reported(slots: &[StorageSlot], key: &[u8; 32]) -> Option<u64> {
+    slots
+        .iter()
+        .find(|slot| &slot.slot == key)
+        .map(|slot| slot.value)
+}
+
+pub const MAX_ORDER_LIFETIME_SECS: u64 = 86_400;
+
+pub fn check_order_expiry(expiry: u64, now_secs: u64) -> Result<(), String> {
+    if expiry == 0 || expiry <= now_secs {
+        return Err("the order expiry must lie in the future".to_string());
+    }
+    if expiry - now_secs > MAX_ORDER_LIFETIME_SECS {
+        return Err("the order expiry must lie within 24 hours".to_string());
+    }
+    Ok(())
+}
+
 pub fn storage_value(slots: &[StorageSlot], key: &[u8; 32]) -> u64 {
     slots
         .iter()
@@ -793,9 +862,10 @@ mod tests {
     const TEST_CHAIN: u64 = 0x0123_4567_89AB_CDEF;
     const TEST_EXPIRY: u64 = 1_900_000_000;
     const TEST_EXPIRY_OFF: u64 = 1024;
+    const TEST_LAYOUT: [u8; LAYOUT_HASH_BYTES] = [0x4c; LAYOUT_HASH_BYTES];
 
     fn counter_layout() -> OrderLayout {
-        OrderLayout::new(120, 128, 144, vec![136], TEST_EXPIRY)
+        OrderLayout::new(120, 128, 144, vec![136], TEST_EXPIRY, TEST_LAYOUT)
     }
 
     #[test]
@@ -884,6 +954,7 @@ mod tests {
             &signer,
             7,
             TEST_EXPIRY,
+            &TEST_LAYOUT,
             &[42],
         );
         let order = build_signed_order_call(
@@ -900,8 +971,8 @@ mod tests {
         assert_eq!(order.message, expected);
         assert_eq!(
             order.message.len(),
-            112,
-            "tag 8, chain 8, contract 32, selector 8, signer 32, nonce 8, expiry 8, one field 8"
+            144,
+            "tag 8, chain 8, contract 32, selector 8, signer 32, nonce 8, expiry 8, layout 32, one field 8"
         );
         assert_eq!(word_at(&order.user_memory, 144), TEST_EXPIRY);
         assert_eq!(order.expiry, TEST_EXPIRY);
@@ -914,23 +985,43 @@ mod tests {
         ));
     }
 
-    const PINNED_ORDER_PREIMAGE: [u8; 112] = [
-        0x51, 0x54, 0x56, 0x53, 0x47, 0x4e, 0x30, 0x32, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd,
+    const PINNED_ORDER_PREIMAGE: [u8; 144] = [
+        0x51, 0x54, 0x56, 0x53, 0x47, 0x4e, 0x30, 0x33, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd,
         0xef, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33,
         0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33,
         0x33, 0x33, 0x33, 0x00, 0x00, 0x00, 0x00, 0x6c, 0xad, 0x12, 0xfc, 0x11, 0x11, 0x11, 0x11,
         0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
         0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x71, 0x3f, 0xb3, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2a,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x71, 0x3f, 0xb3, 0x00, 0x4c,
+        0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c,
+        0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c,
+        0x4c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2a,
     ];
 
     #[test]
     fn an_order_bound_to_one_chain_differs_on_another() {
         let contract = [0x33; 32];
         let signer = [0x11; 32];
-        let a = canonical_order_message(7, &contract, BUMP_SELECTOR, &signer, 3, 9, &[42]);
-        let b = canonical_order_message(9, &contract, BUMP_SELECTOR, &signer, 3, 9, &[42]);
+        let a = canonical_order_message(
+            7,
+            &contract,
+            BUMP_SELECTOR,
+            &signer,
+            3,
+            9,
+            &TEST_LAYOUT,
+            &[42],
+        );
+        let b = canonical_order_message(
+            9,
+            &contract,
+            BUMP_SELECTOR,
+            &signer,
+            3,
+            9,
+            &TEST_LAYOUT,
+            &[42],
+        );
         assert_ne!(
             a, b,
             "the same order under two chains signs a different preimage"
@@ -945,12 +1036,35 @@ mod tests {
     fn an_order_carries_its_expiry_after_the_nonce() {
         let contract = [0x33; 32];
         let signer = [0x11; 32];
-        let a = canonical_order_message(7, &contract, BUMP_SELECTOR, &signer, 3, 100, &[42]);
-        let b = canonical_order_message(7, &contract, BUMP_SELECTOR, &signer, 3, 200, &[42]);
+        let a = canonical_order_message(
+            7,
+            &contract,
+            BUMP_SELECTOR,
+            &signer,
+            3,
+            100,
+            &TEST_LAYOUT,
+            &[42],
+        );
+        let b = canonical_order_message(
+            7,
+            &contract,
+            BUMP_SELECTOR,
+            &signer,
+            3,
+            200,
+            &TEST_LAYOUT,
+            &[42],
+        );
         assert_ne!(a, b);
         assert_eq!(&a[96..104], &100u64.to_be_bytes());
         assert_eq!(a[..96], b[..96]);
         assert_eq!(a[104..], b[104..]);
+        assert_eq!(
+            &a[104..136],
+            &TEST_LAYOUT,
+            "the layout hash follows the expiry"
+        );
     }
 
     #[test]
@@ -962,14 +1076,32 @@ mod tests {
             &[0x11; 32],
             7,
             1_900_000_000,
+            &TEST_LAYOUT,
             &[42],
         );
         assert_eq!(
             preimage.len(),
-            112,
-            "tag 8, chain 8, contract 32, selector 8, signer 32, nonce 8, expiry 8, field 8"
+            144,
+            "tag 8, chain 8, contract 32, selector 8, signer 32, nonce 8, expiry 8, layout 32, field 8"
         );
         assert_eq!(preimage.as_slice(), PINNED_ORDER_PREIMAGE.as_slice());
+        let counter = order_layout_hash(
+            BUMP_SELECTOR,
+            &[OrderLayoutField {
+                name: "order.step".to_string(),
+                ty: "u64".to_string(),
+                width: 8,
+            }],
+        );
+        assert_eq!(
+            crate::json::to_hex(&counter),
+            "101bed5ef18ffd9a405fa75c5f6f3b3171c0a9276712d20d6cebe6916c417bd8",
+            "the layout hash matches what the compiler emits for the counter bump order"
+        );
+        assert_eq!(
+            layout_hash_from_hex(&crate::json::to_hex(&counter)).unwrap(),
+            counter
+        );
     }
 
     #[test]
@@ -985,6 +1117,7 @@ mod tests {
                 TEST_CHAIN,
                 &contract,
                 BUMP_SELECTOR,
+                &TEST_LAYOUT,
                 120,
                 128,
                 expiry_off,
@@ -1070,6 +1203,7 @@ mod tests {
             TEST_CHAIN,
             &contract,
             MINT_SELECTOR,
+            &TEST_LAYOUT,
             120,
             128,
             TEST_EXPIRY_OFF,
@@ -1084,21 +1218,21 @@ mod tests {
 
         assert_eq!(
             order.message.len(),
-            104 + 16 + 32,
-            "the wide amount widens the preimage to 152 bytes"
+            136 + 16 + 32,
+            "the wide amount widens the preimage to 184 bytes"
         );
         assert_eq!(
-            &order.message[104..112],
+            &order.message[136..144],
             &100u64.to_be_bytes(),
             "the amount low word is first"
         );
         assert_eq!(
-            &order.message[112..120],
+            &order.message[144..152],
             &1u64.to_be_bytes(),
             "the amount high word is second"
         );
         assert_eq!(
-            &order.message[120..152],
+            &order.message[152..184],
             &to,
             "the address follows the wide amount"
         );
@@ -1139,6 +1273,7 @@ mod tests {
             TEST_CHAIN,
             &contract,
             MINT_SELECTOR,
+            &TEST_LAYOUT,
             120,
             128,
             TEST_EXPIRY_OFF,
@@ -1152,12 +1287,12 @@ mod tests {
         .unwrap();
         assert_eq!(
             order.message.len(),
-            104 + 16 + 32,
+            136 + 16 + 32,
             "the descriptor width widens the preimage"
         );
-        assert_eq!(&order.message[104..112], &100u64.to_be_bytes());
-        assert_eq!(&order.message[112..120], &1u64.to_be_bytes());
-        assert_eq!(&order.message[120..152], &to);
+        assert_eq!(&order.message[136..144], &100u64.to_be_bytes());
+        assert_eq!(&order.message[144..152], &1u64.to_be_bytes());
+        assert_eq!(&order.message[152..184], &to);
         assert!(ml_dsa::verify(
             order.public_key.as_slice().try_into().unwrap(),
             &order.message,
@@ -1188,6 +1323,7 @@ mod tests {
             TEST_CHAIN,
             &contract,
             MINT_SELECTOR,
+            &TEST_LAYOUT,
             120,
             128,
             TEST_EXPIRY_OFF,
@@ -1205,7 +1341,7 @@ mod tests {
             &to,
             "the executable recipient matches the signed recipient"
         );
-        assert_eq!(&order.message[120..152], &to);
+        assert_eq!(&order.message[152..184], &to);
         let base = DEFAULT_REGION_OFFSET as usize;
         assert_eq!(
             &mem[base..base + order.public_key.len()],
@@ -1242,6 +1378,7 @@ mod tests {
             TEST_CHAIN,
             &contract,
             MINT_SELECTOR,
+            &TEST_LAYOUT,
             120,
             128,
             TEST_EXPIRY_OFF,
@@ -1274,6 +1411,7 @@ mod tests {
             TEST_CHAIN,
             &contract,
             MINT_SELECTOR,
+            &TEST_LAYOUT,
             120,
             128,
             TEST_EXPIRY_OFF,
@@ -1310,6 +1448,7 @@ mod tests {
             TEST_CHAIN,
             &contract,
             MINT_SELECTOR,
+            &TEST_LAYOUT,
             120,
             128,
             TEST_EXPIRY_OFF,
@@ -1336,6 +1475,7 @@ mod tests {
             TEST_CHAIN,
             &contract,
             BUMP_SELECTOR,
+            &TEST_LAYOUT,
             120,
             128,
             TEST_EXPIRY_OFF,
@@ -1363,6 +1503,7 @@ mod tests {
             TEST_CHAIN,
             &contract,
             MINT_SELECTOR,
+            &TEST_LAYOUT,
             120,
             128,
             TEST_EXPIRY_OFF,
@@ -1402,6 +1543,7 @@ mod tests {
             TEST_CHAIN,
             &contract,
             MINT_SELECTOR,
+            &TEST_LAYOUT,
             120,
             128,
             TEST_EXPIRY_OFF,
@@ -1414,9 +1556,9 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(order.message.len(), 104 + 8 + 32);
-        assert_eq!(&order.message[104..112], &500u64.to_be_bytes());
-        assert_eq!(&order.message[112..144], &to);
+        assert_eq!(order.message.len(), 136 + 8 + 32);
+        assert_eq!(&order.message[136..144], &500u64.to_be_bytes());
+        assert_eq!(&order.message[144..176], &to);
 
         assert_eq!(word_at(&order.user_memory, 168), 500);
         assert_eq!(&order.user_memory[136..168], &to);
@@ -1486,6 +1628,7 @@ mod tests {
                 TEST_CHAIN,
                 &contract,
                 MINT_SELECTOR,
+                &TEST_LAYOUT,
                 120,
                 128,
                 TEST_EXPIRY_OFF,
@@ -1565,6 +1708,7 @@ mod tests {
             TEST_CHAIN,
             &contract,
             BUMP_SELECTOR,
+            &TEST_LAYOUT,
             layout.scheme_off,
             layout.ptr_off,
             layout.expiry_off,

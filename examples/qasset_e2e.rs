@@ -4,7 +4,7 @@
 use std::thread::sleep;
 use std::time::Duration;
 
-use qcore::contract::{DeployParam, FieldArg, FieldValue};
+use qcore::contract::{order_layout_hash, DeployParam, FieldArg, FieldValue, OrderLayoutField};
 use qcore::{account_address, Client, Submit, TxStatus};
 
 const DEPLOYER_SEED: [u8; 32] = [11u8; 32];
@@ -131,6 +131,7 @@ fn run() -> Result<(), String> {
         0,
         &contract,
         MINT_SELECTOR,
+        &mint_layout(),
         MINT_SCHEME_OFF,
         MINT_PTR_OFF,
         MINT_EXPIRY_OFF,
@@ -241,6 +242,7 @@ fn run() -> Result<(), String> {
         0,
         &contract,
         MINT_SELECTOR,
+        &mint_layout(),
         MINT_SCHEME_OFF,
         MINT_PTR_OFF,
         MINT_EXPIRY_OFF,
@@ -463,4 +465,22 @@ fn order_expiry() -> u64 {
         .map(|d| d.as_secs())
         .unwrap_or(0)
         .saturating_add(3600)
+}
+
+fn mint_layout() -> [u8; 32] {
+    order_layout_hash(
+        MINT_SELECTOR,
+        &[
+            OrderLayoutField {
+                name: "order.amount".to_string(),
+                ty: "u128".to_string(),
+                width: 16,
+            },
+            OrderLayoutField {
+                name: "order.to".to_string(),
+                ty: "Q_Address".to_string(),
+                width: 32,
+            },
+        ],
+    )
 }
