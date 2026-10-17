@@ -781,7 +781,7 @@ impl SigningSession {
             }
         }
         let reserved = self.reserved.entry(key.to_string()).or_default();
-        if !reserved.insert(reported) {
+        if !reserved.insert(reported) && expected.is_none() {
             return Err(format!(
                 "nonce {reported} is already reserved by a signing in progress in this session; \
                  finish or release it before reserving it again"
@@ -792,6 +792,7 @@ impl SigningSession {
         Ok(reported)
     }
 
+    #[cfg(feature = "client")]
     fn slot_fresh(
         &mut self,
         key: &str,
