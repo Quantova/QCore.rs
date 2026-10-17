@@ -302,6 +302,21 @@ pub fn bounded_valid_until(
     Ok(valid_until)
 }
 
+pub fn shown(text: &str) -> String {
+    let clean: String = text
+        .chars()
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(*c, '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
+        })
+        .collect();
+    if clean.chars().count() > 96 {
+        clean.chars().take(96).collect::<String>() + "..."
+    } else {
+        clean
+    }
+}
+
 pub fn checked_chain_id(name: &str) -> Result<u64, String> {
     if name.is_empty() {
         return Err("a chain name is required to derive a chain id".to_string());
@@ -1041,7 +1056,7 @@ pub fn parse_submit(response: &str) -> Result<Submit, String> {
             expected: v.get("expected").and_then(Json::as_u64),
             got: v.get("got").and_then(Json::as_u64),
         }),
-        other => Err(format!("unknown verdict {other}")),
+        other => Err(format!("unknown verdict {}", shown(other))),
     }
 }
 
@@ -1062,7 +1077,7 @@ pub fn parse_transaction(response: &str) -> Result<TxStatus, String> {
         }),
         "pending" => Ok(TxStatus::Pending),
         "unknown" => Ok(TxStatus::Unknown),
-        other => Err(format!("unknown status {other}")),
+        other => Err(format!("unknown status {}", shown(other))),
     }
 }
 
@@ -1245,24 +1260,26 @@ mod client {
                 );
             }
             let id = chain_id_from_name(name);
+            let name_shown = crate::shown(name);
             let is_mainnet = is_mainnet_chain(name);
             if let Some(configured) = &self.network.chain_id {
                 if name != configured {
                     return Err(format!(
-                        "the gateway reports chain {name} but this client is configured for {configured}, refusing to sign a transaction that would be valid on a network you did not choose"
+                        "the gateway reports chain {name_shown} but this client is configured for {configured}, refusing to sign a transaction that would be valid on a network you did not choose"
                     ));
                 }
             } else {
                 if is_public_chain(name) && !(is_mainnet && self.acknowledge_mainnet) {
                     return Err(format!(
-                        "the gateway reports the public chain {name} but this client was opened for an unnamed network, configure the testnet or mainnet network before signing for it"
+                        "the gateway reports the public chain {name_shown} but this client was opened for an unnamed network, configure the testnet or mainnet network before signing for it"
                     ));
                 }
                 let mut pinned = self.pinned_chain.borrow_mut();
                 match pinned.as_ref() {
                     Some(first) if first != name => {
+                        let first_shown = crate::shown(first);
                         return Err(format!(
-                            "the gateway reported {first} earlier in this session and now reports {name}, refusing to sign"
+                            "the gateway reported {first_shown} earlier in this session and now reports {name_shown}, refusing to sign"
                         ));
                     }
                     Some(_) => {}
@@ -1271,7 +1288,7 @@ mod client {
             }
             if is_mainnet && !self.acknowledge_mainnet {
                 return Err(format!(
-                    "the gateway reports the mainnet chain {name} but this client did not acknowledge mainnet, refusing to sign a mainnet transaction without acknowledging mainnet"
+                    "the gateway reports the mainnet chain {name_shown} but this client did not acknowledge mainnet, refusing to sign a mainnet transaction without acknowledging mainnet"
                 ));
             }
             Ok(id)
@@ -1297,7 +1314,7 @@ mod client {
             if account.address != address {
                 return Err(format!(
                     "the gateway answered for {} when asked about {address}, refusing to trust it",
-                    account.address
+                    crate::shown(&account.address)
                 ));
             }
             Ok(account)
