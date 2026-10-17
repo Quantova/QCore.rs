@@ -3,7 +3,7 @@
 
 use qcore::json::{self, Json};
 use qcore::{account_address, sign_payable_call, LOCAL_CHAIN_ID, NATIVE_TRANSFER_METER, SEED_LEN};
-use qtv_tx::{sign, Body, Call};
+use qtv_tx::{try_sign, Body, Call};
 
 const VECTORS: &str = include_str!("vectors.json");
 
@@ -88,7 +88,7 @@ fn the_frozen_vectors_reproduce_from_the_signing_core() {
             .calling()
             .valid_until(valid_until)
         };
-        let frozen = sign(&sender, &chain_body(0));
+        let frozen = try_sign(&sender, &chain_body(0)).expect("the vector addresses parse");
         assert_eq!(frozen.id(), text(v, "tx_id"), "{name} transaction id");
         assert_eq!(
             hex(&qtv_codec::to_bytes(&frozen)),
@@ -128,7 +128,7 @@ fn the_frozen_vectors_reproduce_from_the_signing_core() {
             transfer_fee,
         )
         .unwrap();
-        let bounded = sign(&sender, &chain_body(300));
+        let bounded = try_sign(&sender, &chain_body(300)).expect("the vector addresses parse");
         assert_eq!(signed.from, text(v, "from"), "{name} from");
         assert_eq!(signed.tx_id, bounded.id(), "{name} bounded transaction id");
         assert_eq!(

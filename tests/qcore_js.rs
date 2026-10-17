@@ -5,7 +5,7 @@ use qcore::{
     account_address, chain_id_from_name, sign_call, sign_payable_call, vm_call_fee, LOCAL_CHAIN_ID,
     SEED_LEN,
 };
-use qtv_tx::{sign, Body, Call, TESTNET_CHAIN_ID};
+use qtv_tx::{try_sign, Body, Call, TESTNET_CHAIN_ID};
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -47,7 +47,7 @@ fn the_transfer_body_reproduces_the_qcore_js_vector() {
         LOCAL_CHAIN_ID,
     )
     .calling();
-    let frozen = sign(&sender, &body);
+    let frozen = try_sign(&sender, &body).expect("the vector addresses parse");
     let body_bytes = "20000000000000008c705c118414c1e32a977ca4ee36fc3f2888b67ec031596abf4ac70e5f5a14f00300000000000000085200000000000040420f000000000000000000000000002000000000000000ba83f436d6f46e181c3bae40ba4ffedb0f62e67cde1a0c558f459b996229593b0400000000000000deadbeef000000000000000098ba0ce08f27d0be0000000000000000000000000000000001";
     assert_eq!(hex(&qtv_codec::to_bytes(&body)), body_bytes);
     assert!(
@@ -71,7 +71,8 @@ fn the_transfer_body_reproduces_the_qcore_js_vector() {
         BOUNDED_TRANSFER_FEE,
     )
     .unwrap();
-    let bounded = sign(&sender, &body.valid_until(BOUNDED_VALID_UNTIL));
+    let bounded = try_sign(&sender, &body.valid_until(BOUNDED_VALID_UNTIL))
+        .expect("the vector addresses parse");
     assert_eq!(signed.tx_bytes, qtv_codec::to_bytes(&bounded));
     assert_eq!(signed.tx_id, BOUNDED_TRANSFER_TX_ID);
     assert_eq!(hex(&signed.tx_bytes), BOUNDED_TRANSFER_TX_HEX);
@@ -107,7 +108,7 @@ fn the_bounded_payable_transaction_reproduces_the_qcore_js_vector() {
     )
     .calling()
     .valid_until(BOUNDED_VALID_UNTIL);
-    let bounded = sign(&sender, &body);
+    let bounded = try_sign(&sender, &body).expect("the vector addresses parse");
     let signed = sign_payable_call(
         &seed,
         7,
@@ -143,7 +144,7 @@ fn the_payable_transaction_reproduces_the_qcore_js_vector() {
         TESTNET_CHAIN_ID,
     )
     .calling();
-    let wrapper = sign(&sender, &body);
+    let wrapper = try_sign(&sender, &body).expect("the vector addresses parse");
     assert!(qtv_tx::verify(&wrapper, sender.public_key()));
     assert_eq!(
         wrapper.id(),

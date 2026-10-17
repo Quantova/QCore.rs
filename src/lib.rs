@@ -10,7 +10,7 @@ mod http;
 use json::{object, to_hex, Json};
 use qtv_account::derive;
 use qtv_codec::{to_bytes, Encoder};
-use qtv_tx::{sign, Body, Call};
+use qtv_tx::{try_sign, Body, Call};
 use qtv_wipe::Zeroizing;
 
 pub use qtv_tx::{
@@ -353,7 +353,8 @@ fn sign_native(
         qtv_tx::KIND_TRANSFER
     })
     .valid_until(valid_until);
-    let wrapper = sign(&sender, &body);
+    let wrapper = try_sign(&sender, &body)
+        .ok_or_else(|| "the sender or the target is not a q1 address".to_string())?;
     Ok(SignedTransfer {
         from: sender.address(),
         tx_id: wrapper.id(),
@@ -433,7 +434,8 @@ pub fn sign_asset_call(
     .calling()
     .carrying(issuer32)
     .valid_until(valid_until);
-    let wrapper = sign(&sender, &body);
+    let wrapper = try_sign(&sender, &body)
+        .ok_or_else(|| "the sender or the target is not a q1 address".to_string())?;
     Ok(SignedTransfer {
         from: sender.address(),
         tx_id: wrapper.id(),
@@ -2589,7 +2591,7 @@ mod tests {
         let body = Body::with_context(sender.address(), 4, 1210, 750, call, 2500, LOCAL_CHAIN_ID)
             .calling()
             .valid_until(300);
-        let wrapper = sign(&sender, &body);
+        let wrapper = try_sign(&sender, &body).expect("the test addresses parse");
         assert!(qtv_tx::verify(&wrapper, sender.public_key()));
         let signed = sign_payable_call(
             &seed,
@@ -2645,7 +2647,7 @@ mod tests {
             0,
             testnet_chain_id(),
         );
-        let wrapper = sign(&sender, &body);
+        let wrapper = try_sign(&sender, &body).expect("the test addresses parse");
         assert!(qtv_tx::verify(&wrapper, sender.public_key()));
 
         let swapped_chain = qtv_tx::Wrapper::new(

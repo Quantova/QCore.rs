@@ -43,7 +43,7 @@ fn main() {
             text(v, "chain_id").parse().expect("chain id"),
         )
         .calling();
-        let signed = qtv_tx::sign(&sender, &body);
+        let signed = qtv_tx::try_sign(&sender, &body).expect("the vector addresses parse");
         println!(
             "{}\tfrom\t{}",
             text(v, "name"),
