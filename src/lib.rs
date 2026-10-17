@@ -302,6 +302,13 @@ pub fn bounded_valid_until(
     Ok(valid_until)
 }
 
+pub fn checked_chain_id(name: &str) -> Result<u64, String> {
+    if name.is_empty() {
+        return Err("a chain name is required to derive a chain id".to_string());
+    }
+    Ok(chain_id_from_name(name))
+}
+
 pub fn canonical_decimal(text: &str) -> Option<u128> {
     if text.len() > 1 && text.starts_with('0') {
         return None;
