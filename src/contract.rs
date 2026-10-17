@@ -298,14 +298,13 @@ pub struct TypedField {
 
 fn field_value_of_width(width: u64, value: &str) -> Result<FieldValue, String> {
     match width {
-        w if w == WORD => value
-            .parse::<u64>()
+        w if w == WORD => crate::canonical_decimal(value)
+            .and_then(|n| u64::try_from(n).ok())
             .map(FieldValue::Word)
-            .map_err(|_| "a word field value is not a whole number".to_string()),
-        16 => value
-            .parse::<u128>()
+            .ok_or_else(|| "a word field value is not a canonical whole number".to_string()),
+        16 => crate::canonical_decimal(value)
             .map(FieldValue::wide)
-            .map_err(|_| "a wide field value is not a whole number".to_string()),
+            .ok_or_else(|| "a wide field value is not a canonical whole number".to_string()),
         32 => {
             let bytes = crate::json::from_hex(value)?;
             let addr: [u8; 32] = bytes
@@ -764,12 +763,13 @@ pub fn parse_storage(response: &str) -> Result<Vec<StorageSlot>, String> {
             .as_slice()
             .try_into()
             .map_err(|_| "a storage slot key is not thirty two bytes".to_string())?;
-        let value = item
-            .get("value")
-            .and_then(Json::as_str)
-            .ok_or("a storage slot has no value")?
-            .parse::<u64>()
-            .map_err(|_| "a storage slot value is not a whole number".to_string())?;
+        let value = match item.get("value") {
+            Some(Json::Str(text)) => crate::canonical_decimal(text)
+                .and_then(|n| u64::try_from(n).ok())
+                .ok_or("a storage slot value is not a canonical whole number")?,
+            Some(_) => return Err("a storage slot value must be a digit string".to_string()),
+            None => return Err("a storage slot has no value".to_string()),
+        };
         slots.push(StorageSlot { slot, value });
     }
     Ok(slots)

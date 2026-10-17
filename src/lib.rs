@@ -302,6 +302,13 @@ pub fn bounded_valid_until(
     Ok(valid_until)
 }
 
+pub fn canonical_decimal(text: &str) -> Option<u128> {
+    if text.len() > 1 && text.starts_with('0') {
+        return None;
+    }
+    whole_number(text)
+}
+
 pub fn whole_number(text: &str) -> Option<u128> {
     if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
         return None;
