@@ -734,9 +734,8 @@ pub fn seed_from_mnemonic(phrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>, Str
     let mut bits: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::with_capacity(entered.len() * 11));
     for word in &entered {
         let index = words
-            .iter()
-            .position(|candidate| candidate == word)
-            .ok_or("a word in the phrase is not in the word list")?;
+            .binary_search(word)
+            .map_err(|_| "a word in the phrase is not in the word list")?;
         for shift in (0..11).rev() {
             bits.push(((index >> shift) & 1) as u8);
         }

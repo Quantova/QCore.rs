@@ -52,14 +52,22 @@ fn cmd_new() -> Result<(), String> {
 }
 
 fn cmd_address(args: &[String]) -> Result<(), String> {
-    let seed = read_seed(args.first().ok_or("usage: qcore address <seed> [index]")?)?;
+    let (argv, args) = take_flag(args, "--insecure-argv");
+    let seed = read_seed(
+        args.first().ok_or("usage: qcore address <seed> [index]")?,
+        argv,
+    )?;
     let index = parse_index(args.get(1))?;
     println!("{}", account_address(&seed, index));
     Ok(())
 }
 
 fn cmd_pubkey(args: &[String]) -> Result<(), String> {
-    let seed = read_seed(args.first().ok_or("usage: qcore pubkey <seed> [index]")?)?;
+    let (argv, args) = take_flag(args, "--insecure-argv");
+    let seed = read_seed(
+        args.first().ok_or("usage: qcore pubkey <seed> [index]")?,
+        argv,
+    )?;
     let index = parse_index(args.get(1))?;
     println!("scheme  1");
     println!("pubkey  {}", to_hex(&account_public_key(&seed, index)));
@@ -80,16 +88,18 @@ fn cmd_info(args: &[String]) -> Result<(), String> {
 fn cmd_register(args: &[String]) -> Result<(), String> {
     let (mainnet, args) = take_flag(args, "--mainnet");
     let (testnet, args) = take_flag(&args, "--testnet");
+    let (acknowledged, args) = take_flag(&args, "--acknowledge-mainnet");
+    let (argv, args) = take_flag(&args, "--insecure-argv");
     if args.len() < 3 {
         return Err(
             "usage: qcore register [--mainnet|--testnet] <gateway-url> <seed-hex> <max-fee>"
                 .to_string(),
         );
     }
-    let seed = read_seed(&args[1])?;
+    let seed = read_seed(&args[1], argv)?;
     let max_fee: u128 = args[2].parse().map_err(|_| "the max fee is not a number")?;
     let (_signed, outcome) =
-        build_client(&args[0], mainnet, testnet).register(&seed, 0, max_fee)?;
+        build_client(&args[0], mainnet, acknowledged, testnet)?.register(&seed, 0, max_fee)?;
     match outcome {
         Submit::Accepted { state, tx_id } => {
             println!("registered {tx_id}");
@@ -122,18 +132,20 @@ fn cmd_balance(args: &[String]) -> Result<(), String> {
 fn cmd_send(args: &[String]) -> Result<(), String> {
     let (mainnet, args) = take_flag(args, "--mainnet");
     let (testnet, args) = take_flag(&args, "--testnet");
+    let (acknowledged, args) = take_flag(&args, "--acknowledge-mainnet");
+    let (argv, args) = take_flag(&args, "--insecure-argv");
     if args.len() < 5 {
         return Err(
             "usage: qcore send [--mainnet|--testnet] <gateway-url> <seed-hex> <to> <amount> <max-fee>"
                 .to_string(),
         );
     }
-    let seed = read_seed(&args[1])?;
+    let seed = read_seed(&args[1], argv)?;
     let to = &args[2];
     let amount: u64 = args[3].parse().map_err(|_| "the amount is not a number")?;
     let max_fee: u128 = args[4].parse().map_err(|_| "the max fee is not a number")?;
-    let (_signed, outcome) =
-        build_client(&args[0], mainnet, testnet).transfer(&seed, 0, to, amount, max_fee)?;
+    let (_signed, outcome) = build_client(&args[0], mainnet, acknowledged, testnet)?
+        .transfer(&seed, 0, to, amount, max_fee)?;
     match outcome {
         Submit::Accepted { state, tx_id } => {
             println!("submitted {tx_id}");
@@ -187,13 +199,14 @@ fn print_usage() {
     println!();
     println!("A <seed> can be the hex directly, @file to read it from a file, - to read it from");
     println!("stdin, or env:VAR to read it from an environment variable. Prefer the last three so");
-    println!("the seed never appears in the process list or your shell history.");
+    println!("the seed never appears in the process list or your shell history. A seed typed");
+    println!("directly is refused unless --insecure-argv is given.");
     println!();
     println!(
         "Pass --testnet or --mainnet on a signing command to bind the client to that network;"
     );
     println!(
-        "--mainnet also acknowledges that the transaction moves real value. The command refuses"
+        "--mainnet also needs --acknowledge-mainnet, since the transaction moves real value. It refuses"
     );
     println!(
         "to sign if the gateway does not serve the chosen network, and refuses to sign for either"
@@ -218,21 +231,32 @@ fn take_flag(args: &[String], flag: &str) -> (bool, Vec<String>) {
     (present, kept)
 }
 
-fn build_client(gateway: &str, mainnet: bool, testnet: bool) -> Client {
-    if mainnet {
+fn build_client(
+    gateway: &str,
+    mainnet: bool,
+    acknowledged: bool,
+    testnet: bool,
+) -> Result<Client, String> {
+    if mainnet && !acknowledged {
+        return Err(
+            "--mainnet moves real value; pass --acknowledge-mainnet as well to sign for it"
+                .to_string(),
+        );
+    }
+    Ok(if mainnet {
         Client::with_network(gateway.to_string(), Network::mainnet(), true)
     } else if testnet {
         Client::with_network(gateway.to_string(), Network::testnet(), false)
     } else {
         Client::new(gateway.to_string())
-    }
+    })
 }
 
 fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn read_seed(source: &str) -> Result<Zeroizing<[u8; 32]>, String> {
+fn read_seed(source: &str, insecure_argv: bool) -> Result<Zeroizing<[u8; 32]>, String> {
     let hex: Zeroizing<String> = Zeroizing::new(if let Some(var) = source.strip_prefix("env:") {
         std::env::var(var).map_err(|_| format!("the environment variable {var} is not set"))?
     } else if let Some(path) = source.strip_prefix('@') {
@@ -244,10 +268,14 @@ fn read_seed(source: &str) -> Result<Zeroizing<[u8; 32]>, String> {
             .map_err(|e| format!("reading the seed from stdin: {e}"))?;
         line
     } else {
-        eprintln!(
-            "warning: a seed on the command line is visible to other users through the process \
-             list and shell history; prefer @file, - for stdin, or env:VAR"
-        );
+        if !insecure_argv {
+            return Err(
+                "a seed on the command line is visible to other users through the process list \
+                 and shell history; pass it as @file, - for stdin, or env:VAR, or repeat the \
+                 command with --insecure-argv"
+                    .to_string(),
+            );
+        }
         source.to_string()
     });
     parse_seed(hex.trim())
@@ -308,9 +336,9 @@ mod seed_tests {
         let path = std::env::temp_dir().join(format!("qcore_seed_{}", std::process::id()));
         std::fs::write(&path, "ab".repeat(32)).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        let shared = read_seed(&format!("@{}", path.display()));
+        let shared = read_seed(&format!("@{}", path.display()), false);
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let private = read_seed(&format!("@{}", path.display()));
+        let private = read_seed(&format!("@{}", path.display()), false);
         let _ = std::fs::remove_file(&path);
         assert!(shared.is_err());
         assert!(private.is_ok());

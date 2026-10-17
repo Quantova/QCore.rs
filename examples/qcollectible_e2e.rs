@@ -17,14 +17,14 @@ const TRANSFER_SELECTOR: [u8; 4] = [0xf8, 0xe2, 0xf9, 0xcd];
 const MINTED_SELECTOR: [u8; 4] = [0x23, 0xb2, 0xd7, 0x61];
 const TRANSFERRED_SELECTOR: [u8; 4] = [0x50, 0xed, 0x06, 0x4a];
 
-const ORDER_TO_OFF: u64 = 80;
-const ORDER_CONTENT_OFF: u64 = 112;
-const ORDER_SCHEME_OFF: u64 = 144;
-const ORDER_PTR_OFF: u64 = 152;
-const ORDER_ID_OFF: u64 = 160;
+const ORDER_TO_OFF: u64 = 120;
+const ORDER_CONTENT_OFF: u64 = 152;
+const ORDER_SCHEME_OFF: u64 = 184;
+const ORDER_PTR_OFF: u64 = 192;
+const ORDER_ID_OFF: u64 = 200;
 
-const TRANSFER_TO_OFF: u64 = 80;
-const TRANSFER_ID_OFF: u64 = 112;
+const TRANSFER_TO_OFF: u64 = 120;
+const TRANSFER_ID_OFF: u64 = 152;
 
 const SUPPLY_SLOT: u64 = 4;
 const OWNER_OF_BASE: u64 = 1 << 40;
