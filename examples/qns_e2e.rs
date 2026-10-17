@@ -37,8 +37,8 @@ const TRANSFERRED_SELECTOR: [u8; 4] = [0x93, 0x46, 0x83, 0x27];
 const SWEPT_SELECTOR: [u8; 4] = [0x3f, 0xa8, 0xe9, 0xaa];
 
 const LABEL_OFF: u64 = 120;
-const PAYMENT_OFF: u64 = 160;
-const YEARS_OFF: u64 = 168;
+const PAYMENT_OFF: u64 = 168;
+const YEARS_OFF: u64 = 160;
 const TARGET_OFF: u64 = 160;
 const TO_OFF: u64 = 160;
 const SWEEP_TO_OFF: u64 = 120;
