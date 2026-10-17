@@ -68,7 +68,7 @@ pub fn post(base: &str, path: &str, body: &str) -> Result<(u16, String), String>
         }
         raw.extend_from_slice(&buf[..n]);
     }
-    let text = String::from_utf8_lossy(&raw).to_string();
+    let text = String::from_utf8(raw).map_err(|_| "the response is not UTF-8".to_string())?;
 
     let status_line = text.lines().next().unwrap_or("");
     if !status_line.starts_with("HTTP/") {
