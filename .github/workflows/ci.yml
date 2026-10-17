@@ -16,6 +16,29 @@ jobs:
         with:
           path: QCore.rs
           persist-credentials: false
+      - name: resolve cross repo pins
+        id: pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin() { awk -v k="$1" '$1==k{print $2}' QCore.rs/cross-repo-pins; }
+          for k in Q-Crypto Quantova-Chain QVM; do
+            v=$(pin "$k")
+            case "$v" in
+              *[!0-9a-f]* | "") echo "cross-repo-pins $k is not a commit: '$v'" >&2; exit 1 ;;
+            esac
+            if [ "${#v}" -ne 40 ]; then
+              echo "cross-repo-pins $k must name a full commit, not '$v'" >&2; exit 1
+            fi
+          done
+          for k in Q-Crypto Quantova-Chain QVM; do
+            locked=$(grep -oE "$k\\.git\\?rev=[0-9a-f]{40}" QCore.rs/Cargo.lock | sed "s/.*rev=//" | sort -u)
+            if [ "$locked" != "$(pin "$k")" ]; then
+              echo "Cargo.lock $k does not match the pinned $(pin "$k")" >&2
+              echo "$locked" >&2
+              exit 1
+            fi
+          done
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
