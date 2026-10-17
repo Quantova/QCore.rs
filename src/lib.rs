@@ -27,9 +27,11 @@ pub const MAX_PLAUSIBLE_HEAD: u64 = 1 << 40;
 const HEAD_BLOCKS_PER_SEC: u64 = 20;
 
 #[cfg(feature = "client")]
-const HEAD_SLACK_SECS: u64 = 60;
+const HEAD_SLACK_BLOCKS: u64 = 240;
 #[cfg(feature = "client")]
 const GENESIS_FLOOR_SECS: u64 = 1_735_689_600;
+#[cfg(feature = "client")]
+const TESTNET_GENESIS_SECS: u64 = 1_791_082_813;
 
 pub const ADDRESS_PAYLOAD_LEN: usize = 32;
 
@@ -849,6 +851,11 @@ mod client {
         format!("{contract}/{hex}")
     }
 
+    type HeldNonces = std::collections::HashMap<
+        String,
+        std::collections::BTreeMap<u64, (u64, std::time::Instant)>,
+    >;
+
     pub struct Client {
         base: String,
         network: Network,
@@ -856,9 +863,7 @@ mod client {
         pinned_chain: std::cell::RefCell<Option<String>>,
         head_floor: std::cell::Cell<Option<(u64, std::time::Instant)>>,
         next_nonces: std::cell::RefCell<std::collections::HashMap<String, u64>>,
-        signed_nonces: std::cell::RefCell<
-            std::collections::HashMap<String, std::collections::BTreeMap<u64, u64>>,
-        >,
+        signed_nonces: std::cell::RefCell<HeldNonces>,
     }
 
     fn fresh(base: String, network: Network, acknowledge_mainnet: bool) -> Client {
@@ -1073,7 +1078,11 @@ mod client {
                 *local = (*local).max(reported);
             }
             if let Some(held) = self.signed_nonces.borrow_mut().get_mut(key) {
-                held.retain(|_, until| *until >= head);
+                held.retain(|_, (until, at)| {
+                    *until >= head
+                        || at.elapsed().as_secs().saturating_mul(HEAD_BLOCKS_PER_SEC)
+                            < DEFAULT_VALIDITY_BLOCKS
+                });
                 if expected.is_none() && held.contains_key(&reported) {
                     return Err(format!(
                         "a transaction was already signed for nonce {reported} in this session and was \
@@ -1090,7 +1099,7 @@ mod client {
                 .borrow_mut()
                 .entry(key.to_string())
                 .or_default()
-                .insert(used, valid_until);
+                .insert(used, (valid_until, std::time::Instant::now()));
         }
 
         fn remember_used(&self, key: &str, used: u64, outcome: &Submit) {
@@ -1113,10 +1122,15 @@ mod client {
             }
             if let Ok(wall) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
                 let secs = wall.as_secs();
-                if secs > GENESIS_FLOOR_SECS {
-                    let max_head = (secs - GENESIS_FLOOR_SECS)
-                        .saturating_add(HEAD_SLACK_SECS)
-                        .saturating_mul(HEAD_BLOCKS_PER_SEC);
+                let genesis = if info.chain_id == TESTNET_CHAIN_NAME {
+                    TESTNET_GENESIS_SECS
+                } else {
+                    GENESIS_FLOOR_SECS
+                };
+                if secs > genesis {
+                    let max_head = (secs - genesis)
+                        .saturating_mul(HEAD_BLOCKS_PER_SEC)
+                        .saturating_add(HEAD_SLACK_BLOCKS);
                     if head > max_head {
                         return Err(format!(
                             "the gateway reports head {head} further ahead than wall-clock time allows, refusing to sign"
@@ -1134,8 +1148,8 @@ mod client {
                 let allowed = now
                     .duration_since(at)
                     .as_secs()
-                    .saturating_add(HEAD_SLACK_SECS)
-                    .saturating_mul(HEAD_BLOCKS_PER_SEC);
+                    .saturating_mul(HEAD_BLOCKS_PER_SEC)
+                    .saturating_add(HEAD_SLACK_BLOCKS);
                 if head > floor.saturating_add(allowed) {
                     return Err(format!(
                         "the gateway head leapt from {floor} to {head} faster than blocks are made, refusing to sign"
@@ -1859,6 +1873,21 @@ mod client {
                 client.expected_slot("a", 4, None, 310).is_err(),
                 "a transaction is still live at its deadline height"
             );
+            assert!(
+                client.expected_slot("a", 4, None, 311).is_err(),
+                "a gateway head past the deadline does not free the slot before blocks could have been made"
+            );
+            let signed_at = std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(
+                    DEFAULT_VALIDITY_BLOCKS / HEAD_BLOCKS_PER_SEC,
+                ))
+                .unwrap();
+            client
+                .signed_nonces
+                .borrow_mut()
+                .get_mut("a")
+                .unwrap()
+                .insert(4, (310, signed_at));
             assert_eq!(
                 client.expected_slot("a", 4, None, 311).unwrap(),
                 4,
