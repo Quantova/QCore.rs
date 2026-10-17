@@ -321,6 +321,9 @@ pub fn checked_chain_id(name: &str) -> Result<u64, String> {
     if name.is_empty() {
         return Err("a chain name is required to derive a chain id".to_string());
     }
+    if name.len() > 64 || !name.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err("a chain name is up to 64 visible ASCII characters".to_string());
+    }
     Ok(chain_id_from_name(name))
 }
 
@@ -670,6 +673,7 @@ pub const SESSION_REMEMBERED_ADDRESSES: usize = 1024;
 pub struct SigningSession {
     next: std::collections::HashMap<String, u64>,
     held: std::collections::HashMap<String, std::collections::BTreeMap<u64, bool>>,
+    reserved: std::collections::HashMap<String, std::collections::BTreeSet<u64>>,
     book: Vec<String>,
     seen: std::collections::VecDeque<String>,
 }
@@ -776,12 +780,41 @@ impl SigningSession {
                 ));
             }
         }
+        let reserved = self.reserved.entry(key.to_string()).or_default();
+        if !reserved.insert(reported) {
+            return Err(format!(
+                "nonce {reported} is already reserved by a signing in progress in this session; \
+                 finish or release it before reserving it again"
+            ));
+        }
         let local = self.next.entry(key.to_string()).or_insert(reported);
         *local = (*local).max(reported);
         Ok(reported)
     }
 
+    fn slot_fresh(
+        &mut self,
+        key: &str,
+        reported: u64,
+        expected: Option<u64>,
+        order: bool,
+    ) -> Result<u64, String> {
+        self.release_pending(key);
+        self.slot(key, reported, expected, order)
+    }
+
+    pub fn release(&mut self, key: &str, slot: u64) {
+        if let Some(reserved) = self.reserved.get_mut(key) {
+            reserved.remove(&slot);
+        }
+    }
+
+    pub fn release_pending(&mut self, key: &str) {
+        self.reserved.remove(key);
+    }
+
     pub fn signed(&mut self, key: &str, slot: u64) {
+        self.release(key, slot);
         self.held
             .entry(key.to_string())
             .or_default()
@@ -1259,7 +1292,7 @@ mod client {
                     "the gateway did not report a chain id to bind the signature to".to_string(),
                 );
             }
-            let id = chain_id_from_name(name);
+            let id = crate::checked_chain_id(name)?;
             let name_shown = crate::shown(name);
             let is_mainnet = is_mainnet_chain(name);
             if let Some(configured) = &self.network.chain_id {
@@ -1383,7 +1416,7 @@ mod client {
             let account = self.account(sender)?;
             self.session
                 .borrow_mut()
-                .slot(sender, account.nonce, expected, false)
+                .slot_fresh(sender, account.nonce, expected, false)
         }
 
         fn submit_held(
@@ -1689,10 +1722,12 @@ mod client {
             let signer = contract::order_signer(owner_seed, owner_index);
             let order_key = order_slot_key(contract, &signer);
             let reported = self.contract_nonce(contract, &signer)?;
-            let nonce =
-                self.session
-                    .borrow_mut()
-                    .slot(&order_key, reported, expected_order_nonce, true)?;
+            let nonce = self.session.borrow_mut().slot_fresh(
+                &order_key,
+                reported,
+                expected_order_nonce,
+                true,
+            )?;
             let order = contract::build_signed_order_call(
                 chain_id,
                 contract,
@@ -1808,10 +1843,12 @@ mod client {
             let signer = contract::order_signer(owner_seed, owner_index);
             let order_key = order_slot_key(contract, &signer);
             let reported = self.contract_nonce(contract, &signer)?;
-            let nonce =
-                self.session
-                    .borrow_mut()
-                    .slot(&order_key, reported, expected_order_nonce, true)?;
+            let nonce = self.session.borrow_mut().slot_fresh(
+                &order_key,
+                reported,
+                expected_order_nonce,
+                true,
+            )?;
             let order = contract::build_typed_order_call(
                 chain_id,
                 contract,

@@ -59,6 +59,8 @@ Each client keeps a signing session. A nonce that was signed once is never signe
 
 The session also remembers the sending accounts and every target signed for, together with an optional address book passed to `Client::with_address_book`. A target that shares at least two leading and two trailing characters with a known address, eight characters in all, but is a different address is refused as a lookalike.
 
+A signing session reserves each nonce it hands out until the transaction is signed, so two flows on one session never sign at the same nonce. A flow that stops before signing frees its nonce with `release`. The free signing functions such as `sign_transfer` take a validity deadline ready made and do not compare it with the chain head. Call `check_valid_until` with a head you trust before using them, or sign through the client, which does this for you.
+
 Numbers the gateway reports are read strictly. An amount or fee string carries only the ASCII digits zero to nine, a count is a JSON integer, and a response that is not strict JSON in UTF-8 is refused. A recovery phrase can be read and written as a byte buffer that the caller wipes, with `mnemonic_bytes_from_seed` and `seed_from_mnemonic_bytes`.
 
 ## Building
