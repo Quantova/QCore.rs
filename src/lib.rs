@@ -725,7 +725,11 @@ fn sha256(data: &[u8]) -> [u8; 32] {
     out
 }
 
-pub fn seed_from_mnemonic(phrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>, String> {
+pub const LEGACY_PHRASE_WORDS: usize = 24;
+
+const LEGACY_PHRASE: &str = "this is a twenty four word recovery phrase from an earlier Quantova release, restore it with the legacy restore and then back up the twenty five word phrase it gives";
+
+fn phrase_bits(phrase: &str) -> Result<(Zeroizing<Vec<u8>>, usize), String> {
     let words = word_list();
     let folded = normalized_phrase(phrase);
     let entered: Vec<&str> = folded.split_whitespace().collect();
@@ -739,7 +743,37 @@ pub fn seed_from_mnemonic(phrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>, Str
             bits.push(((index >> shift) & 1) as u8);
         }
     }
-    if entered.len() != PHRASE_WORDS {
+    Ok((bits, entered.len()))
+}
+
+fn legacy_seed(bits: &[u8], count: usize) -> Option<Zeroizing<[u8; SEED_LEN]>> {
+    if count != LEGACY_PHRASE_WORDS {
+        return None;
+    }
+    let mut seed = Zeroizing::new([0u8; SEED_LEN]);
+    seed.copy_from_slice(&bits_to_bytes(&bits[..SEED_LEN * 8]));
+    (0..8)
+        .all(|i| bits[SEED_LEN * 8 + i] == checksum_bit(&seed, i))
+        .then_some(seed)
+}
+
+pub fn seed_from_legacy_mnemonic(phrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>, String> {
+    let (bits, count) = phrase_bits(phrase)?;
+    if count != LEGACY_PHRASE_WORDS {
+        return Err(
+            "a recovery phrase from an earlier Quantova release is twenty four words".to_string(),
+        );
+    }
+    legacy_seed(&bits, count)
+        .ok_or_else(|| "the recovery phrase checksum does not match, check for a typo".to_string())
+}
+
+pub fn seed_from_mnemonic(phrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>, String> {
+    let (bits, count) = phrase_bits(phrase)?;
+    if count != PHRASE_WORDS {
+        if legacy_seed(&bits, count).is_some() {
+            return Err(LEGACY_PHRASE.to_string());
+        }
         if is_standard_phrase(&bits) {
             return Err(STANDARD_PHRASE.to_string());
         }
