@@ -61,6 +61,10 @@ The session also remembers the sending accounts and every target signed for, tog
 
 A signing session reserves each nonce it hands out until the transaction is signed, so two flows on one session never sign at the same nonce. A flow that stops before signing frees its nonce with `release`. The free signing functions such as `sign_transfer` take a validity deadline ready made and do not compare it with the chain head. Call `check_valid_until` with a head you trust before using them, or sign through the client, which does this for you.
 
+`verify_finality` measures signed stake against the whole roster you pass, which matches the chain when every validator in the roster sits on the committee, as on a network of main validators. Pass exactly the validators of the block's epoch.
+
+`Client::confirm_transaction` confirms a transaction without trusting the gateway. It fetches the transaction's inclusion proof and the finality certificate of its block, checks the certificate against a validator roster you supply and trust, and checks that the transaction is inside that block.
+
 Numbers the gateway reports are read strictly. An amount or fee string carries only the ASCII digits zero to nine, a count is a JSON integer, and a response that is not strict JSON in UTF-8 is refused. A recovery phrase can be read and written as a byte buffer that the caller wipes, with `mnemonic_bytes_from_seed` and `seed_from_mnemonic_bytes`.
 
 ## Building

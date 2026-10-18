@@ -158,6 +158,52 @@ pub fn verify_event(event_root: &[u8; 32], leaf: &[u8], steps: &[([u8; 32], bool
     verify_inclusion(event_root, leaf, &proof)
 }
 
+pub fn verify_transaction(
+    transaction_root: &[u8; 32],
+    tx_id: &str,
+    leaf: &[u8],
+    steps: &[([u8; 32], bool)],
+) -> bool {
+    let hash = qtv_crypto::sha3::sha3_256(leaf);
+    match qtv_idfmt::render_tx(&hash) {
+        Ok(id) if id == tx_id => verify_event(transaction_root, leaf, steps),
+        _ => false,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfirmedTransaction {
+    pub tx_id: String,
+    pub index: u64,
+    pub header: FinalizedHeader,
+}
+
+pub fn parse_steps(steps: &crate::json::Json) -> Result<Vec<([u8; 32], bool)>, String> {
+    let items = match steps {
+        crate::json::Json::Array(items) => items,
+        _ => return Err("the proof steps must be a list".to_string()),
+    };
+    if items.len() > MAX_PROOF_STEPS {
+        return Err("the proof has too many steps".to_string());
+    }
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let sibling: [u8; 32] = item
+            .get("sibling")
+            .and_then(crate::json::Json::as_str)
+            .ok_or_else(|| "a proof step needs a sibling".to_string())
+            .and_then(crate::json::from_hex)?
+            .try_into()
+            .map_err(|_| "a proof sibling is 32 bytes".to_string())?;
+        let left = match item.get("left") {
+            Some(crate::json::Json::Bool(b)) => *b,
+            _ => return Err("a proof step needs a boolean left".to_string()),
+        };
+        out.push((sibling, left));
+    }
+    Ok(out)
+}
+
 pub fn decode_event(leaf: &[u8]) -> Result<ChainEvent, String> {
     let malformed = || "the event leaf is malformed".to_string();
     let mut decoder = Decoder::new(leaf);

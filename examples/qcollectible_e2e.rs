@@ -26,8 +26,8 @@ const ORDER_PTR_OFF: u64 = 192;
 const ORDER_ID_OFF: u64 = 200;
 const ORDER_EXPIRY_OFF: u64 = 208;
 
-const TRANSFER_TO_OFF: u64 = 120;
-const TRANSFER_ID_OFF: u64 = 152;
+const TRANSFER_TO_OFF: u64 = 128;
+const TRANSFER_ID_OFF: u64 = 120;
 
 const SUPPLY_SLOT: u64 = 4;
 const OWNER_OF_BASE: u64 = 1 << 40;

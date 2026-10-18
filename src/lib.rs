@@ -307,7 +307,20 @@ pub fn shown(text: &str) -> String {
         .chars()
         .filter(|c| {
             !c.is_control()
-                && !matches!(*c, '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
+                && !matches!(
+                    *c,
+                    '\u{ad}'
+                        | '\u{61c}'
+                        | '\u{180e}'
+                        | '\u{200b}'..='\u{200f}'
+                        | '\u{2028}'..='\u{202e}'
+                        | '\u{2060}'..='\u{2064}'
+                        | '\u{2066}'..='\u{206f}'
+                        | '\u{feff}'
+                        | '\u{fff9}'..='\u{fffb}'
+                        | '\u{e0001}'
+                        | '\u{e0020}'..='\u{e007f}'
+                )
         })
         .collect();
     if clean.chars().count() > 96 {
@@ -1360,6 +1373,81 @@ mod client {
 
         pub fn transaction(&self, tx_id: &str) -> Result<TxStatus, String> {
             parse_transaction(&self.rpc("get_transaction", transaction_body(tx_id))?)
+        }
+
+        pub fn confirm_transaction(
+            &self,
+            tx_id: &str,
+            roster: &[crate::finality::RosterMember],
+        ) -> Result<crate::finality::ConfirmedTransaction, String> {
+            use crate::json::{from_hex, object, parse, Json};
+            let info = self.node_info()?;
+            if let Some(configured) = &self.network.chain_id {
+                if &info.chain_id != configured {
+                    return Err(format!(
+                        "the gateway reports chain {} but this client is configured for {configured}",
+                        crate::shown(&info.chain_id)
+                    ));
+                }
+            }
+            let chain_id = crate::checked_chain_id(&info.chain_id)?;
+            let proof = parse(&self.rpc(
+                "get_transaction_proof",
+                object(vec![("tx_id", Json::str(tx_id))]).render(),
+            )?)?;
+            let height = proof
+                .get("height")
+                .and_then(Json::as_u64)
+                .ok_or("the transaction proof names no height")?;
+            let index = proof
+                .get("index")
+                .and_then(Json::as_u64)
+                .ok_or("the transaction proof names no index")?;
+            let leaf = from_hex(
+                proof
+                    .get("leaf")
+                    .and_then(Json::as_str)
+                    .ok_or("the transaction proof carries no leaf")?,
+            )?;
+            let steps = crate::finality::parse_steps(
+                proof
+                    .get("steps")
+                    .ok_or("the transaction proof carries no steps")?,
+            )?;
+            let finality = parse(&self.rpc(
+                "get_finality",
+                object(vec![("height", Json::Int(height))]).render(),
+            )?)?;
+            let header = from_hex(
+                finality
+                    .get("header_bytes")
+                    .and_then(Json::as_str)
+                    .ok_or("the finality answer carries no header")?,
+            )?;
+            let certificate = from_hex(
+                finality
+                    .get("certificate")
+                    .and_then(Json::as_str)
+                    .ok_or("the finality answer carries no certificate")?,
+            )?;
+            let verified =
+                crate::finality::verify_finality(chain_id, &header, &certificate, roster)?;
+            if verified.height != height {
+                return Err("the finalized header is not at the height the proof names".to_string());
+            }
+            if !crate::finality::verify_transaction(
+                &verified.transaction_root,
+                tx_id,
+                &leaf,
+                &steps,
+            ) {
+                return Err("the transaction is not proven inside the finalized block".to_string());
+            }
+            Ok(crate::finality::ConfirmedTransaction {
+                tx_id: tx_id.to_string(),
+                index,
+                header: verified,
+            })
         }
 
         pub fn transfer(
