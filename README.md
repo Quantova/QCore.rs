@@ -59,6 +59,8 @@ Each client keeps a signing session. A nonce that was signed once is never signe
 
 The session also remembers the sending accounts and every target signed for, together with an optional address book passed to `Client::with_address_book`. A target that shares at least two leading and two trailing characters with a known address, eight characters in all, but is a different address is refused as a lookalike.
 
+A new session does not take an order nonce above zero from the gateway alone. Name the expected order nonce, or save the session with `Client::save_session` and restore it with `Client::restore_session` so the tracked nonces and held signatures survive a restart. The client refuses to sign for a retired chain name such as Q-test-net-1.
+
 A signing session reserves each nonce it hands out until the transaction is signed, so two flows on one session never sign at the same nonce. A flow that stops before signing frees its nonce with `release`. The free signing functions such as `sign_transfer` take a validity deadline ready made and do not compare it with the chain head. Call `check_valid_until` with a head you trust before using them, or sign through the client, which does this for you.
 
 `verify_finality` measures signed stake against the whole roster you pass, which matches the chain when every validator in the roster sits on the committee, as on a network of main validators. Pass exactly the validators of the block's epoch. Each roster entry names the validator id, its stake, its attestation key and its sortition root with the number of slots the root covers, exactly as get_validator_set serves them, and every signer must prove its committee membership against its root.

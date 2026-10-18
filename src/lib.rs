@@ -334,6 +334,12 @@ pub fn checked_chain_id(name: &str) -> Result<u64, String> {
     if name.is_empty() {
         return Err("a chain name is required to derive a chain id".to_string());
     }
+    if RETIRED_CHAIN_NAMES.contains(&name) {
+        return Err(format!(
+            "the chain name {} belonged to an earlier network and is retired, refusing to sign for it",
+            shown(name)
+        ));
+    }
     if name.len() > 64 || !name.bytes().all(|b| b.is_ascii_graphic()) {
         return Err("a chain name is up to 64 visible ASCII characters".to_string());
     }
@@ -682,6 +688,8 @@ pub fn lookalike_of(candidate: &str, known: &[String]) -> Option<String> {
 
 pub const SESSION_REMEMBERED_ADDRESSES: usize = 1024;
 
+pub const RETIRED_CHAIN_NAMES: &[&str] = &["Q-test-net-1"];
+
 #[derive(Debug, Default, Clone)]
 pub struct SigningSession {
     next: std::collections::HashMap<String, u64>,
@@ -765,14 +773,21 @@ impl SigningSession {
             held.retain(|slot, _| *slot > reported);
         } else {
             if order {
-                if let Some(local) = self.next.get(key).copied() {
-                    if reported > local {
+                match self.next.get(key).copied() {
+                    Some(local) if reported > local => {
                         return Err(format!(
                             "the gateway reports order nonce {reported} above the {local} this client tracked, \
                              refusing to sign an order that stays valid until the contract reaches that nonce; \
                              pass the expected order nonce to sign at it"
                         ));
                     }
+                    None if reported > 0 => {
+                        return Err(format!(
+                            "this signing session has not tracked the order nonce yet and the gateway reports \
+                             {reported}; pass the expected order nonce or restore a saved session before signing"
+                        ));
+                    }
+                    _ => {}
                 }
             }
             if held.contains_key(&reported) {
@@ -815,6 +830,92 @@ impl SigningSession {
     ) -> Result<u64, String> {
         self.release_pending(key);
         self.slot(key, reported, expected, order)
+    }
+
+    pub fn export_state(&self) -> String {
+        use crate::json::{object, Json};
+        let mut keys: Vec<&String> = self.next.keys().chain(self.held.keys()).collect();
+        keys.sort();
+        keys.dedup();
+        let entries: Vec<Json> = keys
+            .into_iter()
+            .map(|key| {
+                let held: Vec<Json> = self
+                    .held
+                    .get(key)
+                    .map(|map| {
+                        map.iter()
+                            .map(|(slot, accepted)| {
+                                object(vec![
+                                    ("slot", Json::str(slot.to_string())),
+                                    ("accepted", Json::Bool(*accepted)),
+                                ])
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let mut fields = vec![("key", Json::str(key.clone())), ("held", Json::Array(held))];
+                if let Some(next) = self.next.get(key) {
+                    fields.push(("next", Json::str(next.to_string())));
+                }
+                object(fields)
+            })
+            .collect();
+        object(vec![
+            ("version", Json::Int(1)),
+            ("keys", Json::Array(entries)),
+        ])
+        .render()
+    }
+
+    pub fn import_state(&mut self, state: &str) -> Result<(), String> {
+        use crate::json::Json;
+        let parsed = crate::json::parse(state)?;
+        if parsed.get("version").and_then(Json::as_u64) != Some(1) {
+            return Err("the saved session is not a version 1 session".to_string());
+        }
+        let items = match parsed.get("keys") {
+            Some(Json::Array(items)) => items,
+            _ => return Err("the saved session has no key list".to_string()),
+        };
+        let number = |value: Option<&Json>, what: &str| -> Result<u64, String> {
+            value
+                .and_then(Json::as_str)
+                .and_then(crate::canonical_decimal)
+                .and_then(|n| u64::try_from(n).ok())
+                .ok_or_else(|| format!("the saved session {what} is not a whole number"))
+        };
+        let mut next = std::collections::HashMap::new();
+        let mut held = std::collections::HashMap::new();
+        for item in items {
+            let key = item
+                .get("key")
+                .and_then(Json::as_str)
+                .ok_or("a saved session entry has no key")?
+                .to_string();
+            if let Some(value) = item.get("next") {
+                next.insert(key.clone(), number(Some(value), "next nonce")?);
+            }
+            let mut slots = std::collections::BTreeMap::new();
+            if let Some(Json::Array(list)) = item.get("held") {
+                for entry in list {
+                    let slot = number(entry.get("slot"), "slot")?;
+                    let accepted = matches!(entry.get("accepted"), Some(Json::Bool(true)));
+                    slots.insert(slot, accepted);
+                }
+            }
+            if !slots.is_empty() {
+                held.insert(key, slots);
+            }
+        }
+        for (key, value) in next {
+            let local = self.next.entry(key).or_insert(value);
+            *local = (*local).max(value);
+        }
+        for (key, slots) in held {
+            self.held.entry(key).or_default().extend(slots);
+        }
+        Ok(())
     }
 
     pub fn release(&mut self, key: &str, slot: u64) {
@@ -1271,6 +1372,14 @@ mod client {
 
         pub fn session(&self) -> SigningSession {
             self.session.borrow().clone()
+        }
+
+        pub fn save_session(&self) -> String {
+            self.session.borrow().export_state()
+        }
+
+        pub fn restore_session(&self, state: &str) -> Result<(), String> {
+            self.session.borrow_mut().import_state(state)
         }
 
         fn guard_mainnet(&self) -> Result<(), String> {
@@ -2277,7 +2386,11 @@ mod client {
         #[test]
         fn an_order_nonce_above_the_tracked_one_needs_the_caller() {
             let mut session = SigningSession::new();
-            assert_eq!(session.slot("o", 2, None, true).unwrap(), 2);
+            assert!(
+                session.slot("o", 2, None, true).is_err(),
+                "a fresh session does not take an order nonce from the gateway alone"
+            );
+            assert_eq!(session.slot("o", 2, Some(2), true).unwrap(), 2);
             assert!(
                 session.slot("o", 7, None, true).is_err(),
                 "an order nonce the gateway raised on its own is refused"
