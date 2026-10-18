@@ -9,8 +9,8 @@ use qtv_attest::{Attestation, Block, Envelope, Parent};
 use qtv_block::{header_from_bytes, verify_inclusion, MerkleProof, MerkleStep};
 use qtv_codec::Decoder;
 use qtv_crypto::ml_dsa::{self, PUBLIC_KEY_BYTES, SIGNATURE_BYTES};
-use qtv_sampler::onetime::{MerklePath, NODE_BYTES, PREIMAGE_BYTES};
-use qtv_sampler::sortition::Credential;
+use qtv_sampler::onetime::{MerklePath, Root, NODE_BYTES, PREIMAGE_BYTES};
+use qtv_sampler::sortition::{verify_membership, Credential};
 
 const PARENT_GENESIS: u8 = 0;
 const PARENT_VALUE: u8 = 1;
@@ -26,6 +26,7 @@ pub struct RosterMember {
     pub id: u64,
     pub stake: u64,
     pub attest_pk: Vec<u8>,
+    pub root: Root,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,6 +125,16 @@ pub fn verify_finality(
         if !ml_dsa::verify(pk, &message, &attestation.sig, ATTEST_CONTEXT) {
             return Err("an attestation signature does not verify".to_string());
         }
+        if member.stake == 0
+            || !verify_membership(
+                &member.root,
+                attestation.from,
+                attestation.slot,
+                &attestation.membership,
+            )
+        {
+            return Err("an attestation does not prove its committee membership".to_string());
+        }
         signed = signed.saturating_add(u128::from(member.stake));
     }
     if signed.saturating_mul(3) < total.saturating_mul(2) {
@@ -176,6 +187,55 @@ pub struct ConfirmedTransaction {
     pub tx_id: String,
     pub index: u64,
     pub header: FinalizedHeader,
+}
+
+pub fn parse_roster(text: &str) -> Result<Vec<RosterMember>, String> {
+    let parsed = crate::json::parse(text)?;
+    let items = match &parsed {
+        crate::json::Json::Array(items) => items,
+        _ => return Err("the validator roster must be a JSON array".to_string()),
+    };
+    if items.len() > MAX_ROSTER {
+        return Err("the validator roster is too large".to_string());
+    }
+    let digits = |item: &crate::json::Json, key: &str| -> Result<u64, String> {
+        let text = item
+            .get(key)
+            .and_then(crate::json::Json::as_str)
+            .ok_or_else(|| format!("a roster member needs {key} as a digit string"))?;
+        crate::canonical_decimal(text)
+            .and_then(|n| u64::try_from(n).ok())
+            .ok_or_else(|| format!("a roster {key} is not a canonical whole number in range"))
+    };
+    let mut roster = Vec::with_capacity(items.len());
+    for item in items {
+        let id = item
+            .get("id")
+            .and_then(crate::json::Json::as_u64)
+            .ok_or_else(|| "a roster member needs a numeric id".to_string())?;
+        let attest_pk = crate::json::from_hex(
+            item.get("attest_pk")
+                .and_then(crate::json::Json::as_str)
+                .ok_or_else(|| "a roster member needs an attest_pk".to_string())?,
+        )?;
+        let digest: [u8; 32] = crate::json::from_hex(
+            item.get("root")
+                .and_then(crate::json::Json::as_str)
+                .ok_or_else(|| "a roster member needs its sortition root".to_string())?,
+        )?
+        .try_into()
+        .map_err(|_| "a roster root is 32 bytes of hex".to_string())?;
+        roster.push(RosterMember {
+            id,
+            stake: digits(item, "stake")?,
+            attest_pk,
+            root: Root {
+                digest,
+                slots: digits(item, "root_slots")?,
+            },
+        });
+    }
+    Ok(roster)
 }
 
 pub fn parse_steps(steps: &crate::json::Json) -> Result<Vec<([u8; 32], bool)>, String> {
