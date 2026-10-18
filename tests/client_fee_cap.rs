@@ -64,7 +64,7 @@ fn spawn_gateway(fee_quon: u128) -> (u16, Arc<AtomicUsize>) {
                 .unwrap_or("");
             let body = match path {
                 "/v1/node_info" => format!(
-                    "{{\"chain_id\":\"Q-dev-net-1\",\"genesis_hash\":\"Qgen\",\"head_height\":10,\
+                    "{{\"chain_id\":\"Q-dev-net-1\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"head_height\":10,\
                      \"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"{fee_quon}\"}},\
                      \"version\":\"test\"}}"
                 ),
@@ -167,7 +167,8 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
     let call_fee = qcore::vm_call_fee(500, 21_000);
 
     let (signed, _) = client.transfer(&seed, 0, &to, 1000, 1000).unwrap();
-    let expected = qcore::sign_transfer(&seed, 0, &to, 1000, 0, 500, chain_id, until, 0).unwrap();
+    let expected =
+        qcore::sign_transfer(&seed, 0, &to, 1000, 0, 500, chain_id, until, 0, &[0u8; 32]).unwrap();
     assert_eq!(signed.tx_bytes, expected.tx_bytes);
 
     let client = Client::new(format!("http://127.0.0.1:{port}"));
@@ -186,20 +187,21 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
         until,
         500,
         0,
+        &[0u8; 32],
     )
     .unwrap();
     assert_eq!(signed.tx_bytes, expected.tx_bytes);
 
     let client = Client::new(format!("http://127.0.0.1:{port}"));
     let (signed, _) = client.register(&seed, 0, 1000).unwrap();
-    let expected = qcore::sign_register(&seed, 0, 0, 500, chain_id, until, 0).unwrap();
+    let expected = qcore::sign_register(&seed, 0, 0, 500, chain_id, until, 0, &[0u8; 32]).unwrap();
     assert_eq!(signed.tx_bytes, expected.tx_bytes);
 
     assert!(
-        qcore::sign_register(&seed, 0, 0, 500, chain_id, 0, 0).is_err(),
+        qcore::sign_register(&seed, 0, 0, 500, chain_id, 0, 0, &[0u8; 32]).is_err(),
         "a deadline that never expires is refused"
     );
-    let later = qcore::sign_register(&seed, 0, 0, 500, chain_id, until + 1, 0).unwrap();
+    let later = qcore::sign_register(&seed, 0, 0, 500, chain_id, until + 1, 0, &[0u8; 32]).unwrap();
     assert_ne!(
         signed.tx_bytes, later.tx_bytes,
         "the window is signed, not implied"
@@ -227,7 +229,7 @@ fn a_rejected_submission_does_not_free_a_signed_nonce_without_explicit_replaceme
                 .nth(1)
                 .unwrap_or("");
             let body = match path {
-                "/v1/node_info" => "{\"chain_id\":\"Q-dev-net-1\",\"genesis_hash\":\"Qgen\",\
+                "/v1/node_info" => "{\"chain_id\":\"Q-dev-net-1\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\
                      \"head_height\":10,\"denomination\":\"Quon\",\
                      \"fee\":{\"transfer_quon\":\"500\"},\"version\":\"test\"}"
                     .to_string(),

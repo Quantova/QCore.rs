@@ -192,6 +192,7 @@ fn run() -> Result<(), String> {
         qcore::valid_until_from(&client.node_info()?),
         info.transfer_fee,
         0,
+        &[0u8; 32],
     )?;
     let replay_out = client.submit(&replay.tx_bytes)?;
     accepted(&replay_out, "replay")?;

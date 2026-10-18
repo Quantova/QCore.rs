@@ -306,6 +306,7 @@ fn run() -> Result<(), String> {
         qcore::valid_until_from(&client.node_info()?),
         info.transfer_fee,
         0,
+        &[0u8; 32],
     )?;
     accepted(&client.submit(&replay.tx_bytes)?, "replay")?;
     let replay_height = poll_finality(&client, &replay.tx_id)?;

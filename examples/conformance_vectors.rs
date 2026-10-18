@@ -26,7 +26,8 @@ fn main() {
         qtv_tx::LOCAL_CHAIN_ID,
     )
     .calling();
-    let transfer = qtv_tx::try_sign(&account, &body).expect("the vector addresses parse");
+    let transfer =
+        qtv_tx::try_sign(&account, &body, &[0u8; 32]).expect("the vector addresses parse");
     println!("transfer.body_bytes {}", hex(&qtv_codec::to_bytes(&body)));
     println!("transfer.tx_id {}", transfer.id());
     println!("transfer.tx_hex {}", hex(&qtv_codec::to_bytes(&transfer)));
@@ -42,6 +43,7 @@ fn main() {
         300,
         500,
         0,
+        &[0u8; 32],
     )
     .expect("sign_call");
     println!("transfer.bounded.tx_id {}", bounded.tx_id);
@@ -57,7 +59,8 @@ fn main() {
         4_032_652_574_364_075_694,
     )
     .calling();
-    let payable = qtv_tx::try_sign(&account, &payable_body).expect("the vector addresses parse");
+    let payable =
+        qtv_tx::try_sign(&account, &payable_body, &[0u8; 32]).expect("the vector addresses parse");
     println!("payable.tx_id {}", payable.id());
     println!("payable.tx_hex {}", hex(&qtv_codec::to_bytes(&payable)));
     let bounded = qcore::sign_payable_call(
@@ -73,6 +76,7 @@ fn main() {
         300,
         500,
         0,
+        &[0u8; 32],
     )
     .expect("sign_payable_call");
     println!("payable.bounded.tx_id {}", bounded.tx_id);

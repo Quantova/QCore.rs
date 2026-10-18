@@ -34,6 +34,10 @@ pub const TESTNET_GENESIS_SECS: u64 = 1_791_082_813;
 
 pub const TESTNET_RPC_URL: &str = "https://rpc-testnet.quantova.org";
 
+pub const TESTNET_GENESIS_HASH: Option<[u8; 32]> = None;
+
+pub const MAINNET_GENESIS_HASH: Option<[u8; 32]> = None;
+
 pub const ADDRESS_PAYLOAD_LEN: usize = 32;
 
 pub const NATIVE_TRANSFER_METER: u64 = 1_210;
@@ -59,6 +63,7 @@ pub struct Network {
     pub denomination: String,
     pub decimals: u8,
     pub is_mainnet: bool,
+    pub genesis_hash: Option<[u8; 32]>,
 }
 
 impl Network {
@@ -71,6 +76,7 @@ impl Network {
             denomination: DENOMINATION.to_string(),
             decimals: DECIMALS,
             is_mainnet: false,
+            genesis_hash: TESTNET_GENESIS_HASH,
         }
     }
 
@@ -83,6 +89,7 @@ impl Network {
             denomination: DENOMINATION.to_string(),
             decimals: DECIMALS,
             is_mainnet: true,
+            genesis_hash: MAINNET_GENESIS_HASH,
         }
     }
 
@@ -95,6 +102,7 @@ impl Network {
             denomination: DENOMINATION.to_string(),
             decimals: DECIMALS,
             is_mainnet: false,
+            genesis_hash: None,
         }
     }
 }
@@ -154,6 +162,7 @@ pub fn sign_payable_call(
     valid_until: u64,
     transfer_fee: u128,
     head: u64,
+    genesis: &[u8; 32],
 ) -> Result<SignedTransfer, String> {
     check_call_to(target, meter_limit, args.len(), fee, transfer_fee)?;
     sign_native(
@@ -169,6 +178,7 @@ pub fn sign_payable_call(
         valid_until,
         true,
         head,
+        genesis,
     )
 }
 
@@ -380,11 +390,13 @@ fn sign_native(
     valid_until: u64,
     calls_code: bool,
     head: u64,
+    genesis: &[u8; 32],
 ) -> Result<SignedTransfer, String> {
     if !valid_address(target) {
         return Err("the target is not a Q1 address".to_string());
     }
     check_valid_until(valid_until, head)?;
+    check_genesis(chain_id, genesis)?;
     let sender = derive(seed, index);
     if !calls_code && address_payload(target)? == address_payload(&sender.address())? {
         return Err(
@@ -408,7 +420,7 @@ fn sign_native(
         qtv_tx::KIND_TRANSFER
     })
     .valid_until(valid_until);
-    let wrapper = try_sign(&sender, &body)
+    let wrapper = try_sign(&sender, &body, genesis)
         .ok_or_else(|| "the sender or the target is not a q1 address".to_string())?;
     Ok(SignedTransfer {
         from: sender.address(),
@@ -430,6 +442,7 @@ pub fn sign_call(
     valid_until: u64,
     transfer_fee: u128,
     head: u64,
+    genesis: &[u8; 32],
 ) -> Result<SignedTransfer, String> {
     sign_payable_call(
         seed,
@@ -444,6 +457,7 @@ pub fn sign_call(
         valid_until,
         transfer_fee,
         head,
+        genesis,
     )
 }
 
@@ -462,6 +476,7 @@ pub fn sign_asset_call(
     valid_until: u64,
     transfer_fee: u128,
     head: u64,
+    genesis: &[u8; 32],
 ) -> Result<SignedTransfer, String> {
     if !valid_address(target) {
         return Err("the target is not a Q1 address".to_string());
@@ -476,6 +491,7 @@ pub fn sign_asset_call(
     }
     check_call(meter_limit, args.len(), fee, transfer_fee)?;
     check_valid_until(valid_until, head)?;
+    check_genesis(chain_id, genesis)?;
     let mut issuer32 = [0u8; 32];
     issuer32.copy_from_slice(&issuer);
     let sender = derive(seed, index);
@@ -492,7 +508,7 @@ pub fn sign_asset_call(
     .calling()
     .carrying(issuer32)
     .valid_until(valid_until);
-    let wrapper = try_sign(&sender, &body)
+    let wrapper = try_sign(&sender, &body, genesis)
         .ok_or_else(|| "the sender or the target is not a q1 address".to_string())?;
     Ok(SignedTransfer {
         from: sender.address(),
@@ -512,6 +528,7 @@ pub fn sign_transfer(
     chain_id: u64,
     valid_until: u64,
     head: u64,
+    genesis: &[u8; 32],
 ) -> Result<SignedTransfer, String> {
     if amount == 0 {
         return Err("a transfer of zero is refused, the chain rejects it".to_string());
@@ -531,6 +548,7 @@ pub fn sign_transfer(
         valid_until,
         false,
         head,
+        genesis,
     )
 }
 
@@ -542,6 +560,7 @@ pub fn sign_register(
     chain_id: u64,
     valid_until: u64,
     head: u64,
+    genesis: &[u8; 32],
 ) -> Result<SignedTransfer, String> {
     let public_key = account_public_key(seed, index);
     sign_native(
@@ -557,6 +576,7 @@ pub fn sign_register(
         valid_until,
         false,
         head,
+        genesis,
     )
 }
 
@@ -596,6 +616,26 @@ pub fn transaction_body(tx_id: &str) -> String {
 
 pub fn block_by_height_body(height: u64) -> String {
     object(vec![("height", Json::Int(height))]).render()
+}
+
+pub fn check_genesis(chain_id: u64, genesis: &[u8; 32]) -> Result<(), String> {
+    if *genesis == [0u8; 32] && (chain_id == testnet_chain_id() || chain_id == MAINNET_CHAIN_ID) {
+        return Err(
+            "a transaction for a public network needs that network's genesis hash, not zero, refusing to sign"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+pub fn parse_genesis(info: &NodeInfo) -> Result<[u8; 32], String> {
+    crate::json::from_hex(&info.genesis_hash)
+        .ok()
+        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+        .ok_or_else(|| {
+            "the gateway reports a genesis hash that is not 32 bytes of hex, refusing to sign"
+                .to_string()
+        })
 }
 
 #[derive(Debug, Clone)]
@@ -1394,6 +1434,22 @@ mod client {
             self.session.borrow_mut().import_state(state)
         }
 
+        fn signing_genesis(&self, info: &NodeInfo) -> Result<[u8; 32], String> {
+            let reported = crate::parse_genesis(info)?;
+            match self.network.genesis_hash {
+                Some(pinned) if pinned == reported => Ok(pinned),
+                Some(_) => Err(
+                    "the gateway reports a genesis hash other than the one pinned for this network, refusing to sign"
+                        .to_string(),
+                ),
+                None if crate::is_public_chain(&info.chain_id) => Err(format!(
+                    "no genesis hash is pinned for the public chain {}, pin the network genesis before signing",
+                    crate::shown(&info.chain_id)
+                )),
+                None => Ok(reported),
+            }
+        }
+
         fn guard_mainnet(&self) -> Result<(), String> {
             if self.network.is_mainnet && !self.acknowledge_mainnet {
                 let label = self.network.chain_id.clone().unwrap_or_default();
@@ -1469,7 +1525,10 @@ mod client {
             if status == 200 {
                 Ok(text)
             } else {
-                Err(format!("the gateway returned {status}: {text}"))
+                Err(format!(
+                    "the gateway returned {status}: {}",
+                    crate::shown(&text)
+                ))
             }
         }
 
@@ -1623,6 +1682,7 @@ mod client {
                 chain_id,
                 valid_until,
                 info.head_height,
+                &self.signing_genesis(&info)?,
             )?;
             self.remember_targets(&[to]);
             let outcome = self.submit_held(&[(&sender, nonce)], &signed)?;
@@ -1671,7 +1731,14 @@ mod client {
             use crate::json::{from_hex, object, parse, Json};
             let trusted = self.trusted_roster.borrow();
             let Some((genesis_hash, roster)) = trusted.as_ref() else {
-                if self.network.is_mainnet {
+                if self.network.is_mainnet
+                    || crate::is_mainnet_chain(&info.chain_id)
+                    || self
+                        .network
+                        .chain_id
+                        .as_deref()
+                        .is_some_and(crate::is_mainnet_chain)
+                {
                     return Err(
                         "a mainnet client needs a trusted validator roster to check the head it signs against, call trust_roster first"
                             .to_string(),
@@ -1816,6 +1883,7 @@ mod client {
                 valid_until,
                 info.transfer_fee,
                 info.head_height,
+                &self.signing_genesis(&info)?,
             )?;
             self.remember_targets(&[target]);
             let outcome = self.submit_held(&[(&sender, nonce)], &signed)?;
@@ -1888,6 +1956,7 @@ mod client {
                 valid_until,
                 info.transfer_fee,
                 info.head_height,
+                &self.signing_genesis(&info)?,
             )?;
             self.remember_targets(&[target, asset_issuer]);
             let outcome = self.submit_held(&[(&sender, nonce)], &signed)?;
@@ -2028,6 +2097,7 @@ mod client {
                 valid_until,
                 info.transfer_fee,
                 info.head_height,
+                &self.signing_genesis(&info)?,
             )?;
             self.remember_targets(&[contract]);
             let outcome =
@@ -2159,6 +2229,7 @@ mod client {
                     valid_until,
                     info.transfer_fee,
                     info.head_height,
+                    &self.signing_genesis(&info)?,
                 )?,
                 None => sign_payable_call(
                     caller_seed,
@@ -2173,6 +2244,7 @@ mod client {
                     valid_until,
                     info.transfer_fee,
                     info.head_height,
+                    &self.signing_genesis(&info)?,
                 )?,
             };
             self.remember_targets(&targets);
@@ -2235,6 +2307,7 @@ mod client {
                 valid_until,
                 info.transfer_fee,
                 info.head_height,
+                &self.signing_genesis(&info)?,
             )?;
             let outcome = self.submit_held(&[(&deployer, account_nonce)], &signed)?;
             if accepted(&outcome) {
@@ -2292,6 +2365,7 @@ mod client {
                 chain_id,
                 valid_until,
                 info.head_height,
+                &self.signing_genesis(&info)?,
             )?;
             let outcome = self.submit_held(&[(&sender, nonce)], &signed)?;
             Ok((signed, outcome))
@@ -2549,7 +2623,7 @@ mod client {
 
         fn node_info_reply(chain: &str, head: u64) -> String {
             format!(
-                "{{\"chain_id\":\"{chain}\",\"genesis_hash\":\"g\",\"head_height\":{head},\
+                "{{\"chain_id\":\"{chain}\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"head_height\":{head},\
                  \"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"500\"}},\"version\":\"t\"}}"
             )
         }
@@ -2615,6 +2689,7 @@ mod tests {
                 300,
                 500,
                 0,
+                &[0u8; 32],
             )
         };
         assert_eq!(NATIVE_TRANSFER_METER, 1_210);
@@ -2642,6 +2717,7 @@ mod tests {
                 300,
                 500,
                 0,
+                &[0u8; 32],
             )
         };
         assert!(deploy(MAX_METER_LIMIT + 1).is_ok());
@@ -2668,6 +2744,7 @@ mod tests {
             300,
             500,
             0,
+            &[0u8; 32],
         )
         .is_err());
         assert!(sign_payable_call(
@@ -2683,6 +2760,7 @@ mod tests {
             300,
             500,
             0,
+            &[0u8; 32],
         )
         .is_err());
     }
@@ -2692,8 +2770,19 @@ mod tests {
         let seed = [7u8; SEED_LEN];
         let own = account_address(&seed, 0);
         let other = account_address(&seed, 1);
-        let refused =
-            sign_transfer(&seed, 0, &own, 1000, 0, 500, LOCAL_CHAIN_ID, 300, 0).unwrap_err();
+        let refused = sign_transfer(
+            &seed,
+            0,
+            &own,
+            1000,
+            0,
+            500,
+            LOCAL_CHAIN_ID,
+            300,
+            0,
+            &[0u8; 32],
+        )
+        .unwrap_err();
         assert!(refused.contains("self transfer"), "{refused}");
         assert!(sign_transfer(
             &seed,
@@ -2705,13 +2794,37 @@ mod tests {
             LOCAL_CHAIN_ID,
             300,
             0,
+            &[0u8; 32],
         )
         .is_err());
-        assert!(sign_transfer(&seed, 0, &other, 1000, 0, 500, LOCAL_CHAIN_ID, 300, 0).is_ok());
-        let forever =
-            sign_transfer(&seed, 0, &other, 1000, 0, 500, LOCAL_CHAIN_ID, 0, 0).unwrap_err();
+        assert!(sign_transfer(
+            &seed,
+            0,
+            &other,
+            1000,
+            0,
+            500,
+            LOCAL_CHAIN_ID,
+            300,
+            0,
+            &[0u8; 32]
+        )
+        .is_ok());
+        let forever = sign_transfer(
+            &seed,
+            0,
+            &other,
+            1000,
+            0,
+            500,
+            LOCAL_CHAIN_ID,
+            0,
+            0,
+            &[0u8; 32],
+        )
+        .unwrap_err();
         assert!(forever.contains("never expires"), "{forever}");
-        assert!(sign_register(&seed, 0, 0, 500, LOCAL_CHAIN_ID, 0, 0).is_err());
+        assert!(sign_register(&seed, 0, 0, 500, LOCAL_CHAIN_ID, 0, 0, &[0u8; 32]).is_err());
         assert!(sign_call(
             &seed,
             0,
@@ -2724,6 +2837,7 @@ mod tests {
             0,
             500,
             0,
+            &[0u8; 32],
         )
         .is_err());
         assert!(sign_asset_call(
@@ -2740,11 +2854,22 @@ mod tests {
             0,
             500,
             0,
+            &[0u8; 32],
         )
         .is_err());
-        assert!(
-            sign_transfer(&seed, 0, &other, 1000, 0, 500, LOCAL_CHAIN_ID, u64::MAX, 0).is_err()
-        );
+        assert!(sign_transfer(
+            &seed,
+            0,
+            &other,
+            1000,
+            0,
+            500,
+            LOCAL_CHAIN_ID,
+            u64::MAX,
+            0,
+            &[0u8; 32]
+        )
+        .is_err());
     }
 
     #[test]
@@ -2885,7 +3010,19 @@ mod tests {
     fn a_transfer_and_a_call_are_distinct_transactions() {
         let seed = [7u8; SEED_LEN];
         let to = account_address(&seed, 1);
-        let transfer = sign_transfer(&seed, 0, &to, 1000, 3, 500, LOCAL_CHAIN_ID, 300, 0).unwrap();
+        let transfer = sign_transfer(
+            &seed,
+            0,
+            &to,
+            1000,
+            3,
+            500,
+            LOCAL_CHAIN_ID,
+            300,
+            0,
+            &[0u8; 32],
+        )
+        .unwrap();
         let mut encoder = Encoder::new();
         encoder.put_u64(1000);
         let call = sign_call(
@@ -2900,6 +3037,7 @@ mod tests {
             300,
             500,
             0,
+            &[0u8; 32],
         )
         .unwrap();
         assert_ne!(
@@ -2934,6 +3072,7 @@ mod tests {
             300,
             500,
             0,
+            &[0u8; 32],
         )
         .unwrap();
         let payable_zero = sign_payable_call(
@@ -2949,6 +3088,7 @@ mod tests {
             300,
             500,
             0,
+            &[0u8; 32],
         )
         .unwrap();
         assert_eq!(free.tx_bytes, payable_zero.tx_bytes);
@@ -2966,6 +3106,7 @@ mod tests {
             300,
             500,
             0,
+            &[0u8; 32],
         )
         .unwrap();
         assert_ne!(funded.tx_bytes, free.tx_bytes);
@@ -2981,8 +3122,8 @@ mod tests {
         let body = Body::with_context(sender.address(), 4, 1210, 750, call, 2500, LOCAL_CHAIN_ID)
             .calling()
             .valid_until(300);
-        let wrapper = try_sign(&sender, &body).expect("the test addresses parse");
-        assert!(qtv_tx::verify(&wrapper, sender.public_key()));
+        let wrapper = try_sign(&sender, &body, &[0u8; 32]).expect("the test addresses parse");
+        assert!(qtv_tx::verify(&wrapper, sender.public_key(), &[0u8; 32]));
         let signed = sign_payable_call(
             &seed,
             0,
@@ -2996,6 +3137,7 @@ mod tests {
             300,
             500,
             0,
+            &[0u8; 32],
         )
         .unwrap();
         assert_eq!(signed.tx_bytes, to_bytes(&wrapper));
@@ -3008,20 +3150,64 @@ mod tests {
         let sender = derive(&seed, 0);
         let target = account_address(&seed, 1);
 
-        let testnet =
-            sign_transfer(&seed, 0, &target, 1000, 5, 500, testnet_chain_id(), 300, 0).unwrap();
-        let mainnet =
-            sign_transfer(&seed, 0, &target, 1000, 5, 500, MAINNET_CHAIN_ID, 300, 0).unwrap();
+        let testnet = sign_transfer(
+            &seed,
+            0,
+            &target,
+            1000,
+            5,
+            500,
+            testnet_chain_id(),
+            300,
+            0,
+            &[9u8; 32],
+        )
+        .unwrap();
+        let mainnet = sign_transfer(
+            &seed,
+            0,
+            &target,
+            1000,
+            5,
+            500,
+            MAINNET_CHAIN_ID,
+            300,
+            0,
+            &[9u8; 32],
+        )
+        .unwrap();
         assert_ne!(
             testnet.tx_bytes, mainnet.tx_bytes,
             "the chain id moves the signed bytes"
         );
         assert_ne!(testnet.tx_id, mainnet.tx_id);
 
-        let cheap =
-            sign_transfer(&seed, 0, &target, 1000, 5, 500, testnet_chain_id(), 300, 0).unwrap();
-        let dear =
-            sign_transfer(&seed, 0, &target, 1000, 5, 999, testnet_chain_id(), 300, 0).unwrap();
+        let cheap = sign_transfer(
+            &seed,
+            0,
+            &target,
+            1000,
+            5,
+            500,
+            testnet_chain_id(),
+            300,
+            0,
+            &[9u8; 32],
+        )
+        .unwrap();
+        let dear = sign_transfer(
+            &seed,
+            0,
+            &target,
+            1000,
+            5,
+            999,
+            testnet_chain_id(),
+            300,
+            0,
+            &[9u8; 32],
+        )
+        .unwrap();
         assert_ne!(
             cheap.tx_bytes, dear.tx_bytes,
             "the fee moves the signed bytes"
@@ -3039,8 +3225,8 @@ mod tests {
             0,
             testnet_chain_id(),
         );
-        let wrapper = try_sign(&sender, &body).expect("the test addresses parse");
-        assert!(qtv_tx::verify(&wrapper, sender.public_key()));
+        let wrapper = try_sign(&sender, &body, &[9u8; 32]).expect("the test addresses parse");
+        assert!(qtv_tx::verify(&wrapper, sender.public_key(), &[9u8; 32]));
 
         let swapped_chain = qtv_tx::Wrapper::new(
             Body::with_context(
@@ -3056,7 +3242,7 @@ mod tests {
             wrapper.signature().to_vec(),
         );
         assert!(
-            !qtv_tx::verify(&swapped_chain, sender.public_key()),
+            !qtv_tx::verify(&swapped_chain, sender.public_key(), &[9u8; 32]),
             "the testnet signature must not verify for mainnet"
         );
 
@@ -3074,7 +3260,7 @@ mod tests {
             wrapper.signature().to_vec(),
         );
         assert!(
-            !qtv_tx::verify(&swapped_fee, sender.public_key()),
+            !qtv_tx::verify(&swapped_fee, sender.public_key(), &[9u8; 32]),
             "the testnet signature must not verify at a swapped fee"
         );
     }
@@ -3097,6 +3283,7 @@ mod tests {
             300,
             500,
             0,
+            &[0u8; 32],
         )
         .unwrap();
         let lower = sign_call(
@@ -3111,6 +3298,7 @@ mod tests {
             300,
             500,
             0,
+            &[0u8; 32],
         )
         .unwrap();
         assert_eq!(upper.tx_bytes, lower.tx_bytes);
@@ -3164,6 +3352,7 @@ mod tests {
                 LOCAL_CHAIN_ID,
                 300,
                 0,
+                &[0u8; 32],
             )
             .is_err(),
             "a transfer to a non address target is refused before signing"
@@ -3180,6 +3369,7 @@ mod tests {
             300,
             500,
             0,
+            &[0u8; 32],
         )
         .is_err());
     }
@@ -3197,6 +3387,7 @@ mod tests {
             LOCAL_CHAIN_ID,
             300,
             0,
+            &[0u8; 32],
         )
         .is_err());
         assert!(sign_call(
@@ -3211,6 +3402,7 @@ mod tests {
             300,
             500,
             0,
+            &[0u8; 32],
         )
         .is_err());
         assert!(sign_payable_call(
@@ -3226,6 +3418,7 @@ mod tests {
             300,
             500,
             0,
+            &[0u8; 32],
         )
         .is_err());
     }
@@ -3332,7 +3525,7 @@ mod wire_tests {
         }
         let info = |fee: &str| {
             format!(
-                "{{\"chain_id\":\"c\",\"genesis_hash\":\"g\",\"head_height\":1,\"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"{fee}\"}},\"version\":\"v\"}}"
+                "{{\"chain_id\":\"c\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"head_height\":1,\"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"{fee}\"}},\"version\":\"v\"}}"
             )
         };
         assert!(parse_node_info(&info("500")).is_ok());

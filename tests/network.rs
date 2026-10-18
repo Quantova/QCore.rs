@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use qcore::{account_address, Client, Network, Submit, MAINNET_CHAIN_NAME};
+use qcore::{account_address, Client, Network, MAINNET_CHAIN_NAME};
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
@@ -64,7 +64,7 @@ fn spawn_gateway(reported_chain: &'static str) -> (u16, Arc<AtomicUsize>) {
                 .unwrap_or("");
             let body = match path {
                 "/v1/node_info" => format!(
-                    "{{\"chain_id\":\"{reported_chain}\",\"genesis_hash\":\"Qgen\",\
+                    "{{\"chain_id\":\"{reported_chain}\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\
                      \"head_height\":10,\"denomination\":\"Quon\",\
                      \"fee\":{{\"transfer_quon\":\"100\"}},\"version\":\"test\"}}"
                 ),
@@ -107,6 +107,7 @@ fn mainnet_at(base: &str) -> Network {
         denomination: "Quon".to_string(),
         decimals: 6,
         is_mainnet: true,
+        genesis_hash: Some([0u8; 32]),
     }
 }
 
@@ -215,17 +216,14 @@ fn a_plain_url_client_is_refused_a_mainnet_gateway_until_acknowledged() {
     );
 
     let acked = Client::with_network(base.clone(), Network::for_url(base), true);
-    let (_signed, outcome) = acked
+    let err = acked
         .transfer(&seed, 0, &to, 1000, 1000)
-        .expect("an acknowledged url client signs");
-    match outcome {
-        Submit::Accepted { .. } => {}
-        other => panic!("expected an accepted submission, got {other:?}"),
-    }
+        .expect_err("an acknowledged url client still needs a trusted roster for mainnet");
+    assert!(err.contains("trusted validator roster"), "{err}");
     assert_eq!(
         submits.load(Ordering::SeqCst),
-        1,
-        "the acknowledged client submits once"
+        0,
+        "nothing reaches mainnet without a trusted roster"
     );
 }
 
@@ -251,9 +249,19 @@ fn a_configured_network_refuses_a_mismatched_gateway_chain_id() {
 fn a_zero_transfer_is_refused_and_a_lookalike_is_flagged() {
     let seed = [21u8; 32];
     let to = account_address(&seed, 1);
-    assert!(
-        qcore::sign_transfer(&seed, 0, &to, 0, 0, 500, qcore::testnet_chain_id(), 100, 0).is_err()
-    );
+    assert!(qcore::sign_transfer(
+        &seed,
+        0,
+        &to,
+        0,
+        0,
+        500,
+        qcore::testnet_chain_id(),
+        100,
+        0,
+        &[0u8; 32]
+    )
+    .is_err());
     let known = vec![to.clone()];
     assert_eq!(
         qcore::lookalike_of(&to, &known),

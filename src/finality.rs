@@ -10,6 +10,7 @@ use qtv_block::{header_from_bytes, verify_inclusion, MerkleProof, MerkleStep};
 use qtv_codec::Decoder;
 use qtv_crypto::ml_dsa::{self, PUBLIC_KEY_BYTES, SIGNATURE_BYTES};
 use qtv_sampler::onetime::{MerklePath, Root, NODE_BYTES, PREIMAGE_BYTES};
+use qtv_sampler::params::{MAX_ACTIVE_VALIDATORS, MIN_SELF_STAKE};
 use qtv_sampler::sortition::{verify_membership, Credential};
 
 const PARENT_GENESIS: u8 = 0;
@@ -49,6 +50,18 @@ pub struct ChainEvent {
     pub data: Vec<u8>,
 }
 
+fn active_set(roster: &[RosterMember]) -> Vec<&RosterMember> {
+    let mut active: Vec<&RosterMember> = roster
+        .iter()
+        .filter(|m| m.stake >= MIN_SELF_STAKE)
+        .collect();
+    if active.len() > MAX_ACTIVE_VALIDATORS {
+        active.sort_by(|a, b| b.stake.cmp(&a.stake).then(a.id.cmp(&b.id)));
+        active.truncate(MAX_ACTIVE_VALIDATORS);
+    }
+    active
+}
+
 pub fn verify_finality(
     chain_id: u64,
     genesis_hash: &[u8; 32],
@@ -60,7 +73,6 @@ pub fn verify_finality(
         return Err("the validator roster is empty or too large".to_string());
     }
     let mut ids = BTreeSet::new();
-    let mut total: u128 = 0;
     for member in roster {
         if !ids.insert(member.id) {
             return Err("the validator roster names a validator twice".to_string());
@@ -68,8 +80,12 @@ pub fn verify_finality(
         if member.attest_pk.len() != PUBLIC_KEY_BYTES {
             return Err("a roster key is not an ML-DSA-65 public key".to_string());
         }
-        total = total.saturating_add(u128::from(member.stake));
     }
+    let roster = active_set(roster);
+    let total: u128 = roster
+        .iter()
+        .map(|m| u128::from(m.stake))
+        .fold(0u128, u128::saturating_add);
     if total == 0 {
         return Err("the validator roster carries no stake".to_string());
     }
