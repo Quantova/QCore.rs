@@ -1296,6 +1296,7 @@ mod client {
         pinned_chain: std::cell::RefCell<Option<String>>,
         head_floor: std::cell::Cell<Option<(u64, std::time::Instant)>>,
         session: std::cell::RefCell<SigningSession>,
+        trusted_roster: std::cell::RefCell<Option<Vec<crate::finality::RosterMember>>>,
     }
 
     fn fresh(base: String, network: Network, acknowledge_mainnet: bool) -> Client {
@@ -1306,6 +1307,7 @@ mod client {
             transport: Box::new(LoopbackHttp),
             pinned_chain: std::cell::RefCell::new(None),
             head_floor: std::cell::Cell::new(None),
+            trusted_roster: std::cell::RefCell::new(None),
             session: std::cell::RefCell::new(SigningSession::new()),
         }
     }
@@ -1647,7 +1649,59 @@ mod client {
             Ok(outcome)
         }
 
+        pub fn trust_roster(
+            &self,
+            roster: Vec<crate::finality::RosterMember>,
+        ) -> Result<(), String> {
+            if roster.is_empty() {
+                return Err("a trusted validator roster cannot be empty".to_string());
+            }
+            *self.trusted_roster.borrow_mut() = Some(roster);
+            Ok(())
+        }
+
+        fn verify_head(&self, info: &NodeInfo) -> Result<(), String> {
+            use crate::json::{from_hex, object, parse, Json};
+            let roster = self.trusted_roster.borrow();
+            let Some(roster) = roster.as_ref() else {
+                if self.network.is_mainnet {
+                    return Err(
+                        "a mainnet client needs a trusted validator roster to check the head it signs against, call trust_roster first"
+                            .to_string(),
+                    );
+                }
+                return Ok(());
+            };
+            let chain_id = crate::checked_chain_id(&info.chain_id)?;
+            let finality = parse(&self.rpc(
+                "get_finality",
+                object(vec![("height", Json::Int(info.head_height))]).render(),
+            )?)?;
+            let header = from_hex(
+                finality
+                    .get("header_bytes")
+                    .and_then(Json::as_str)
+                    .ok_or("the finality answer carries no header")?,
+            )?;
+            let certificate = from_hex(
+                finality
+                    .get("certificate")
+                    .and_then(Json::as_str)
+                    .ok_or("the finality answer carries no certificate")?,
+            )?;
+            let verified =
+                crate::finality::verify_finality(chain_id, &header, &certificate, roster)?;
+            if verified.height != info.head_height {
+                return Err(format!(
+                    "the gateway reports head {} but its finality proof is for height {}, refusing to sign",
+                    info.head_height, verified.height
+                ));
+            }
+            Ok(())
+        }
+
         fn validity(&self, info: &NodeInfo) -> Result<u64, String> {
+            self.verify_head(info)?;
             let head = info.head_height;
             let wall = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

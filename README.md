@@ -67,6 +67,8 @@ A signing session reserves each nonce it hands out until the transaction is sign
 
 `Client::confirm_transaction` confirms a transaction without trusting the gateway. It fetches the transaction's inclusion proof and the finality certificate of its block, checks the certificate against a validator roster you supply and trust, and checks that the transaction is inside that block.
 
+`Client::trust_roster` gives the client a validator roster you trust. From then on the client checks the head the gateway reports against the finality certificate of that block before it signs, so a gateway cannot move a deadline by lying about the head. A mainnet client refuses to sign until it has a trusted roster.
+
 Numbers the gateway reports are read strictly. An amount or fee string carries only the ASCII digits zero to nine, a count is a JSON integer, and a response that is not strict JSON in UTF-8 is refused. A recovery phrase can be read and written as a byte buffer that the caller wipes, with `mnemonic_bytes_from_seed` and `seed_from_mnemonic_bytes`.
 
 ## Building
