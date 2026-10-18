@@ -115,7 +115,7 @@ fn a_testnet_network_carries_its_identifiers() {
     let testnet = Network::testnet();
     assert_eq!(
         testnet.chain_id.as_deref(),
-        Some("Q-test-net-1"),
+        Some("Q-test-net-01"),
         "testnet chain id"
     );
     assert_eq!(
@@ -134,7 +134,7 @@ fn a_client_from_a_network_carries_that_network() {
     let client = Client::with_network("http://127.0.0.1:1", Network::testnet(), false);
     assert_eq!(
         client.network().chain_id.as_deref(),
-        Some("Q-test-net-1"),
+        Some("Q-test-net-01"),
         "the client carries its configured network"
     );
     let refused = Client::for_network(Network::testnet(), false)
@@ -177,7 +177,7 @@ fn a_mainnet_network_client_is_refused_without_acknowledgement_and_opens_with_it
 
 #[test]
 fn a_configured_mainnet_is_refused_when_not_acknowledged_whatever_the_gateway_reports() {
-    let (port, submits) = spawn_gateway("Q-test-net-1");
+    let (port, submits) = spawn_gateway("Q-test-net-01");
     let base = format!("http://127.0.0.1:{port}");
     let client = Client::with_network(base, mainnet_at("http://placeholder"), false);
     let seed = [11u8; 32];

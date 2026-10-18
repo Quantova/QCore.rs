@@ -7,6 +7,8 @@ use qcore::{
 };
 use qtv_tx::{try_sign, Body, Call, TESTNET_CHAIN_ID};
 
+const VECTOR_CHAIN_ID: u64 = 4_032_652_574_364_075_694;
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -104,7 +106,7 @@ fn the_bounded_payable_transaction_reproduces_the_qcore_js_vector() {
         1_000_000,
         Call::new(target.clone(), vec![0xde, 0xad, 0xbe, 0xef]),
         250_000,
-        TESTNET_CHAIN_ID,
+        VECTOR_CHAIN_ID,
     )
     .calling()
     .valid_until(BOUNDED_VALID_UNTIL);
@@ -118,7 +120,7 @@ fn the_bounded_payable_transaction_reproduces_the_qcore_js_vector() {
         3,
         21_000,
         1_000_000,
-        TESTNET_CHAIN_ID,
+        VECTOR_CHAIN_ID,
         BOUNDED_VALID_UNTIL,
         BOUNDED_TRANSFER_FEE,
     )
@@ -141,7 +143,7 @@ fn the_payable_transaction_reproduces_the_qcore_js_vector() {
         1_000_000,
         call,
         250_000,
-        TESTNET_CHAIN_ID,
+        VECTOR_CHAIN_ID,
     )
     .calling();
     let wrapper = try_sign(&sender, &body).expect("the vector addresses parse");
@@ -204,7 +206,7 @@ fn the_display_string_maps_to_the_signed_chain_id() {
         qcore::MAINNET_CHAIN_ID
     );
     assert_eq!(
-        chain_id_from_name("Q-test-net-1"),
-        4_032_652_574_364_075_694
+        chain_id_from_name("Q-test-net-01"),
+        6_995_079_887_857_407_393
     );
 }

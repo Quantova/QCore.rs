@@ -18,7 +18,7 @@ pub use qtv_tx::{
     chain_id_from_name, LOCAL_CHAIN_ID, LOCAL_CHAIN_NAME, MAINNET_CHAIN_ID, MAINNET_CHAIN_NAME,
 };
 
-pub const TESTNET_CHAIN_NAME: &str = "Q-test-net-1";
+pub const TESTNET_CHAIN_NAME: &str = "Q-test-net-01";
 
 pub const SEED_LEN: usize = 32;
 
@@ -2167,7 +2167,7 @@ mod client {
         #[test]
         fn an_unnamed_client_refuses_a_public_chain_and_pins_the_first_private_one() {
             let client = Client::new("http://127.0.0.1:1");
-            assert!(client.signing_chain_id(&info("Q-test-net-1", 1)).is_err());
+            assert!(client.signing_chain_id(&info("Q-test-net-01", 1)).is_err());
             assert!(client.signing_chain_id(&info("Q-main-net-1", 1)).is_err());
             assert!(client.signing_chain_id(&info("Q-dev-net-7", 1)).is_ok());
             assert!(client.signing_chain_id(&info("Q-dev-net-8", 1)).is_err());
@@ -2553,7 +2553,7 @@ mod tests {
     #[test]
     fn the_testnet_chain_id_follows_the_testnet_network() {
         let configured = Network::testnet().chain_id.unwrap();
-        assert_eq!(configured, "Q-test-net-1");
+        assert_eq!(configured, "Q-test-net-01");
         assert_eq!(testnet_chain_id(), chain_id_from_name(&configured));
         assert_eq!(testnet_chain_id(), qtv_tx::TESTNET_CHAIN_ID);
     }
@@ -3044,7 +3044,7 @@ mod tests {
             "a url client with no chosen network must refuse a mainnet reporting gateway"
         );
         assert!(
-            client.signing_chain_id(&info("Q-test-net-1")).is_err(),
+            client.signing_chain_id(&info("Q-test-net-01")).is_err(),
             "a url client must be configured before it signs for the public testnet"
         );
         assert!(
