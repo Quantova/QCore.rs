@@ -51,6 +51,7 @@ pub struct ChainEvent {
 
 pub fn verify_finality(
     chain_id: u64,
+    genesis_hash: &[u8; 32],
     header_bytes: &[u8],
     certificate_bytes: &[u8],
     roster: &[RosterMember],
@@ -115,7 +116,7 @@ pub fn verify_finality(
             return Err("a roster key is degenerate".to_string());
         }
         let message = attestation_message(
-            chain_id,
+            qtv_attest::ChainBinding::new(chain_id, *genesis_hash),
             attestation.height,
             attestation.slot,
             attestation.view,
