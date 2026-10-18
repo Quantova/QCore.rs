@@ -167,7 +167,7 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
     let call_fee = qcore::vm_call_fee(500, 21_000);
 
     let (signed, _) = client.transfer(&seed, 0, &to, 1000, 1000).unwrap();
-    let expected = qcore::sign_transfer(&seed, 0, &to, 1000, 0, 500, chain_id, until).unwrap();
+    let expected = qcore::sign_transfer(&seed, 0, &to, 1000, 0, 500, chain_id, until, 0).unwrap();
     assert_eq!(signed.tx_bytes, expected.tx_bytes);
 
     let client = Client::new(format!("http://127.0.0.1:{port}"));
@@ -185,20 +185,21 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
         chain_id,
         until,
         500,
+        0,
     )
     .unwrap();
     assert_eq!(signed.tx_bytes, expected.tx_bytes);
 
     let client = Client::new(format!("http://127.0.0.1:{port}"));
     let (signed, _) = client.register(&seed, 0, 1000).unwrap();
-    let expected = qcore::sign_register(&seed, 0, 0, 500, chain_id, until).unwrap();
+    let expected = qcore::sign_register(&seed, 0, 0, 500, chain_id, until, 0).unwrap();
     assert_eq!(signed.tx_bytes, expected.tx_bytes);
 
     assert!(
-        qcore::sign_register(&seed, 0, 0, 500, chain_id, 0).is_err(),
+        qcore::sign_register(&seed, 0, 0, 500, chain_id, 0, 0).is_err(),
         "a deadline that never expires is refused"
     );
-    let later = qcore::sign_register(&seed, 0, 0, 500, chain_id, until + 1).unwrap();
+    let later = qcore::sign_register(&seed, 0, 0, 500, chain_id, until + 1, 0).unwrap();
     assert_ne!(
         signed.tx_bytes, later.tx_bytes,
         "the window is signed, not implied"

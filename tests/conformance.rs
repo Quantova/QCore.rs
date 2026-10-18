@@ -110,6 +110,7 @@ fn the_frozen_vectors_reproduce_from_the_signing_core() {
                 chain_id,
                 0,
                 transfer_fee,
+                0,
             )
             .is_err(),
             "{name} the core refuses the never expiring deadline the frozen vector was signed at"
@@ -126,6 +127,7 @@ fn the_frozen_vectors_reproduce_from_the_signing_core() {
             chain_id,
             300,
             transfer_fee,
+            0,
         )
         .unwrap();
         let bounded = try_sign(&sender, &chain_body(300)).expect("the vector addresses parse");
@@ -150,6 +152,7 @@ fn the_frozen_vectors_reproduce_from_the_signing_core() {
             chain_id,
             300,
             transfer_fee,
+            0,
         )
         .unwrap();
         assert_eq!(

@@ -153,6 +153,7 @@ pub fn sign_payable_call(
     chain_id: u64,
     valid_until: u64,
     transfer_fee: u128,
+    head: u64,
 ) -> Result<SignedTransfer, String> {
     check_call_to(target, meter_limit, args.len(), fee, transfer_fee)?;
     sign_native(
@@ -167,6 +168,7 @@ pub fn sign_payable_call(
         chain_id,
         valid_until,
         true,
+        head,
     )
 }
 
@@ -377,11 +379,12 @@ fn sign_native(
     chain_id: u64,
     valid_until: u64,
     calls_code: bool,
+    head: u64,
 ) -> Result<SignedTransfer, String> {
     if !valid_address(target) {
         return Err("the target is not a Q1 address".to_string());
     }
-    check_deadline(valid_until)?;
+    check_valid_until(valid_until, head)?;
     let sender = derive(seed, index);
     if !calls_code && address_payload(target)? == address_payload(&sender.address())? {
         return Err(
@@ -426,6 +429,7 @@ pub fn sign_call(
     chain_id: u64,
     valid_until: u64,
     transfer_fee: u128,
+    head: u64,
 ) -> Result<SignedTransfer, String> {
     sign_payable_call(
         seed,
@@ -439,6 +443,7 @@ pub fn sign_call(
         chain_id,
         valid_until,
         transfer_fee,
+        head,
     )
 }
 
@@ -456,6 +461,7 @@ pub fn sign_asset_call(
     chain_id: u64,
     valid_until: u64,
     transfer_fee: u128,
+    head: u64,
 ) -> Result<SignedTransfer, String> {
     if !valid_address(target) {
         return Err("the target is not a Q1 address".to_string());
@@ -469,7 +475,7 @@ pub fn sign_asset_call(
         return Err("the asset issuer is not a Q1 address".to_string());
     }
     check_call(meter_limit, args.len(), fee, transfer_fee)?;
-    check_deadline(valid_until)?;
+    check_valid_until(valid_until, head)?;
     let mut issuer32 = [0u8; 32];
     issuer32.copy_from_slice(&issuer);
     let sender = derive(seed, index);
@@ -505,6 +511,7 @@ pub fn sign_transfer(
     fee: u128,
     chain_id: u64,
     valid_until: u64,
+    head: u64,
 ) -> Result<SignedTransfer, String> {
     if amount == 0 {
         return Err("a transfer of zero is refused, the chain rejects it".to_string());
@@ -523,6 +530,7 @@ pub fn sign_transfer(
         chain_id,
         valid_until,
         false,
+        head,
     )
 }
 
@@ -533,6 +541,7 @@ pub fn sign_register(
     fee: u128,
     chain_id: u64,
     valid_until: u64,
+    head: u64,
 ) -> Result<SignedTransfer, String> {
     let public_key = account_public_key(seed, index);
     sign_native(
@@ -547,6 +556,7 @@ pub fn sign_register(
         chain_id,
         valid_until,
         false,
+        head,
     )
 }
 
@@ -1604,6 +1614,7 @@ mod client {
                 info.transfer_fee,
                 chain_id,
                 valid_until,
+                info.head_height,
             )?;
             self.remember_targets(&[to]);
             let outcome = self.submit_held(&[(&sender, nonce)], &signed)?;
@@ -1738,6 +1749,7 @@ mod client {
                 chain_id,
                 valid_until,
                 info.transfer_fee,
+                info.head_height,
             )?;
             self.remember_targets(&[target]);
             let outcome = self.submit_held(&[(&sender, nonce)], &signed)?;
@@ -1809,6 +1821,7 @@ mod client {
                 chain_id,
                 valid_until,
                 info.transfer_fee,
+                info.head_height,
             )?;
             self.remember_targets(&[target, asset_issuer]);
             let outcome = self.submit_held(&[(&sender, nonce)], &signed)?;
@@ -1948,6 +1961,7 @@ mod client {
                 chain_id,
                 valid_until,
                 info.transfer_fee,
+                info.head_height,
             )?;
             self.remember_targets(&[contract]);
             let outcome =
@@ -2078,6 +2092,7 @@ mod client {
                     chain_id,
                     valid_until,
                     info.transfer_fee,
+                    info.head_height,
                 )?,
                 None => sign_payable_call(
                     caller_seed,
@@ -2091,6 +2106,7 @@ mod client {
                     chain_id,
                     valid_until,
                     info.transfer_fee,
+                    info.head_height,
                 )?,
             };
             self.remember_targets(&targets);
@@ -2152,6 +2168,7 @@ mod client {
                 chain_id,
                 valid_until,
                 info.transfer_fee,
+                info.head_height,
             )?;
             let outcome = self.submit_held(&[(&deployer, account_nonce)], &signed)?;
             if accepted(&outcome) {
@@ -2201,8 +2218,15 @@ mod client {
             let chain_id = self.signing_chain_id(&info)?;
             let valid_until = self.validity(&info)?;
             let nonce = self.checked_nonce(&sender, expected_nonce)?;
-            let signed =
-                sign_register(seed, index, nonce, info.transfer_fee, chain_id, valid_until)?;
+            let signed = sign_register(
+                seed,
+                index,
+                nonce,
+                info.transfer_fee,
+                chain_id,
+                valid_until,
+                info.head_height,
+            )?;
             let outcome = self.submit_held(&[(&sender, nonce)], &signed)?;
             Ok((signed, outcome))
         }
@@ -2524,6 +2548,7 @@ mod tests {
                 LOCAL_CHAIN_ID,
                 300,
                 500,
+                0,
             )
         };
         assert_eq!(NATIVE_TRANSFER_METER, 1_210);
@@ -2550,6 +2575,7 @@ mod tests {
                 LOCAL_CHAIN_ID,
                 300,
                 500,
+                0,
             )
         };
         assert!(deploy(MAX_METER_LIMIT + 1).is_ok());
@@ -2574,7 +2600,8 @@ mod tests {
             500,
             LOCAL_CHAIN_ID,
             300,
-            500
+            500,
+            0,
         )
         .is_err());
         assert!(sign_payable_call(
@@ -2588,7 +2615,8 @@ mod tests {
             500,
             LOCAL_CHAIN_ID,
             300,
-            500
+            500,
+            0,
         )
         .is_err());
     }
@@ -2598,7 +2626,8 @@ mod tests {
         let seed = [7u8; SEED_LEN];
         let own = account_address(&seed, 0);
         let other = account_address(&seed, 1);
-        let refused = sign_transfer(&seed, 0, &own, 1000, 0, 500, LOCAL_CHAIN_ID, 300).unwrap_err();
+        let refused =
+            sign_transfer(&seed, 0, &own, 1000, 0, 500, LOCAL_CHAIN_ID, 300, 0).unwrap_err();
         assert!(refused.contains("self transfer"), "{refused}");
         assert!(sign_transfer(
             &seed,
@@ -2608,13 +2637,15 @@ mod tests {
             0,
             500,
             LOCAL_CHAIN_ID,
-            300
+            300,
+            0,
         )
         .is_err());
-        assert!(sign_transfer(&seed, 0, &other, 1000, 0, 500, LOCAL_CHAIN_ID, 300).is_ok());
-        let forever = sign_transfer(&seed, 0, &other, 1000, 0, 500, LOCAL_CHAIN_ID, 0).unwrap_err();
+        assert!(sign_transfer(&seed, 0, &other, 1000, 0, 500, LOCAL_CHAIN_ID, 300, 0).is_ok());
+        let forever =
+            sign_transfer(&seed, 0, &other, 1000, 0, 500, LOCAL_CHAIN_ID, 0, 0).unwrap_err();
         assert!(forever.contains("never expires"), "{forever}");
-        assert!(sign_register(&seed, 0, 0, 500, LOCAL_CHAIN_ID, 0).is_err());
+        assert!(sign_register(&seed, 0, 0, 500, LOCAL_CHAIN_ID, 0, 0).is_err());
         assert!(sign_call(
             &seed,
             0,
@@ -2625,7 +2656,8 @@ mod tests {
             500,
             LOCAL_CHAIN_ID,
             0,
-            500
+            500,
+            0,
         )
         .is_err());
         assert!(sign_asset_call(
@@ -2640,10 +2672,13 @@ mod tests {
             500,
             LOCAL_CHAIN_ID,
             0,
-            500
+            500,
+            0,
         )
         .is_err());
-        assert!(sign_transfer(&seed, 0, &other, 1000, 0, 500, LOCAL_CHAIN_ID, u64::MAX).is_err());
+        assert!(
+            sign_transfer(&seed, 0, &other, 1000, 0, 500, LOCAL_CHAIN_ID, u64::MAX, 0).is_err()
+        );
     }
 
     #[test]
@@ -2784,7 +2819,7 @@ mod tests {
     fn a_transfer_and_a_call_are_distinct_transactions() {
         let seed = [7u8; SEED_LEN];
         let to = account_address(&seed, 1);
-        let transfer = sign_transfer(&seed, 0, &to, 1000, 3, 500, LOCAL_CHAIN_ID, 300).unwrap();
+        let transfer = sign_transfer(&seed, 0, &to, 1000, 3, 500, LOCAL_CHAIN_ID, 300, 0).unwrap();
         let mut encoder = Encoder::new();
         encoder.put_u64(1000);
         let call = sign_call(
@@ -2798,6 +2833,7 @@ mod tests {
             LOCAL_CHAIN_ID,
             300,
             500,
+            0,
         )
         .unwrap();
         assert_ne!(
@@ -2831,6 +2867,7 @@ mod tests {
             LOCAL_CHAIN_ID,
             300,
             500,
+            0,
         )
         .unwrap();
         let payable_zero = sign_payable_call(
@@ -2845,6 +2882,7 @@ mod tests {
             LOCAL_CHAIN_ID,
             300,
             500,
+            0,
         )
         .unwrap();
         assert_eq!(free.tx_bytes, payable_zero.tx_bytes);
@@ -2861,6 +2899,7 @@ mod tests {
             LOCAL_CHAIN_ID,
             300,
             500,
+            0,
         )
         .unwrap();
         assert_ne!(funded.tx_bytes, free.tx_bytes);
@@ -2890,6 +2929,7 @@ mod tests {
             LOCAL_CHAIN_ID,
             300,
             500,
+            0,
         )
         .unwrap();
         assert_eq!(signed.tx_bytes, to_bytes(&wrapper));
@@ -2903,9 +2943,9 @@ mod tests {
         let target = account_address(&seed, 1);
 
         let testnet =
-            sign_transfer(&seed, 0, &target, 1000, 5, 500, testnet_chain_id(), 300).unwrap();
+            sign_transfer(&seed, 0, &target, 1000, 5, 500, testnet_chain_id(), 300, 0).unwrap();
         let mainnet =
-            sign_transfer(&seed, 0, &target, 1000, 5, 500, MAINNET_CHAIN_ID, 300).unwrap();
+            sign_transfer(&seed, 0, &target, 1000, 5, 500, MAINNET_CHAIN_ID, 300, 0).unwrap();
         assert_ne!(
             testnet.tx_bytes, mainnet.tx_bytes,
             "the chain id moves the signed bytes"
@@ -2913,8 +2953,9 @@ mod tests {
         assert_ne!(testnet.tx_id, mainnet.tx_id);
 
         let cheap =
-            sign_transfer(&seed, 0, &target, 1000, 5, 500, testnet_chain_id(), 300).unwrap();
-        let dear = sign_transfer(&seed, 0, &target, 1000, 5, 999, testnet_chain_id(), 300).unwrap();
+            sign_transfer(&seed, 0, &target, 1000, 5, 500, testnet_chain_id(), 300, 0).unwrap();
+        let dear =
+            sign_transfer(&seed, 0, &target, 1000, 5, 999, testnet_chain_id(), 300, 0).unwrap();
         assert_ne!(
             cheap.tx_bytes, dear.tx_bytes,
             "the fee moves the signed bytes"
@@ -2989,6 +3030,7 @@ mod tests {
             LOCAL_CHAIN_ID,
             300,
             500,
+            0,
         )
         .unwrap();
         let lower = sign_call(
@@ -3002,6 +3044,7 @@ mod tests {
             LOCAL_CHAIN_ID,
             300,
             500,
+            0,
         )
         .unwrap();
         assert_eq!(upper.tx_bytes, lower.tx_bytes);
@@ -3053,7 +3096,8 @@ mod tests {
                 0,
                 500,
                 LOCAL_CHAIN_ID,
-                300
+                300,
+                0,
             )
             .is_err(),
             "a transfer to a non address target is refused before signing"
@@ -3068,7 +3112,8 @@ mod tests {
             500,
             LOCAL_CHAIN_ID,
             300,
-            500
+            500,
+            0,
         )
         .is_err());
     }
@@ -3084,7 +3129,8 @@ mod tests {
             0,
             500,
             LOCAL_CHAIN_ID,
-            300
+            300,
+            0,
         )
         .is_err());
         assert!(sign_call(
@@ -3097,7 +3143,8 @@ mod tests {
             500,
             LOCAL_CHAIN_ID,
             300,
-            500
+            500,
+            0,
         )
         .is_err());
         assert!(sign_payable_call(
@@ -3111,7 +3158,8 @@ mod tests {
             500,
             LOCAL_CHAIN_ID,
             300,
-            500
+            500,
+            0,
         )
         .is_err());
     }

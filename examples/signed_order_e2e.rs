@@ -191,6 +191,7 @@ fn run() -> Result<(), String> {
         qcore::chain_id_from_name(&info.chain_id),
         qcore::valid_until_from(&client.node_info()?),
         info.transfer_fee,
+        0,
     )?;
     let replay_out = client.submit(&replay.tx_bytes)?;
     accepted(&replay_out, "replay")?;

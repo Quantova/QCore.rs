@@ -41,6 +41,7 @@ fn main() {
         qtv_tx::LOCAL_CHAIN_ID,
         300,
         500,
+        0,
     )
     .expect("sign_call");
     println!("transfer.bounded.tx_id {}", bounded.tx_id);
@@ -71,6 +72,7 @@ fn main() {
         4_032_652_574_364_075_694,
         300,
         500,
+        0,
     )
     .expect("sign_payable_call");
     println!("payable.bounded.tx_id {}", bounded.tx_id);

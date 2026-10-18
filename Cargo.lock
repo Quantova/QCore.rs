@@ -12,7 +12,7 @@ dependencies = [
 
 [[package]]
 name = "qcore"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "qtv-account",
  "qtv-attest",

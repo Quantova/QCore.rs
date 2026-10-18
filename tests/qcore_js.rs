@@ -71,6 +71,7 @@ fn the_transfer_body_reproduces_the_qcore_js_vector() {
         LOCAL_CHAIN_ID,
         BOUNDED_VALID_UNTIL,
         BOUNDED_TRANSFER_FEE,
+        0,
     )
     .unwrap();
     let bounded = try_sign(&sender, &body.valid_until(BOUNDED_VALID_UNTIL))
@@ -123,6 +124,7 @@ fn the_bounded_payable_transaction_reproduces_the_qcore_js_vector() {
         VECTOR_CHAIN_ID,
         BOUNDED_VALID_UNTIL,
         BOUNDED_TRANSFER_FEE,
+        0,
     )
     .unwrap();
     assert_eq!(signed.tx_bytes, qtv_codec::to_bytes(&bounded));
@@ -171,6 +173,7 @@ fn the_target_case_never_moves_the_signed_bytes() {
         LOCAL_CHAIN_ID,
         300,
         500,
+        0,
     )
     .unwrap();
     let signed_lower = sign_call(
@@ -184,6 +187,7 @@ fn the_target_case_never_moves_the_signed_bytes() {
         LOCAL_CHAIN_ID,
         300,
         500,
+        0,
     )
     .unwrap();
     assert_eq!(signed_upper.tx_bytes, signed_lower.tx_bytes);

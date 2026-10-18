@@ -252,7 +252,7 @@ fn a_zero_transfer_is_refused_and_a_lookalike_is_flagged() {
     let seed = [21u8; 32];
     let to = account_address(&seed, 1);
     assert!(
-        qcore::sign_transfer(&seed, 0, &to, 0, 0, 500, qcore::testnet_chain_id(), 100).is_err()
+        qcore::sign_transfer(&seed, 0, &to, 0, 0, 500, qcore::testnet_chain_id(), 100, 0).is_err()
     );
     let known = vec![to.clone()];
     assert_eq!(
