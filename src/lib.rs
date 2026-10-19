@@ -36,7 +36,11 @@ pub const TESTNET_RPC_URL: &str = "https://rpc-testnet.quantova.org";
 
 pub const TESTNET_GENESIS_HASH: Option<[u8; 32]> = None;
 
+pub const TESTNET_ROSTER_COMMITMENT: Option<[u8; 32]> = None;
+
 pub const MAINNET_GENESIS_HASH: Option<[u8; 32]> = None;
+
+pub const MAINNET_ROSTER_COMMITMENT: Option<[u8; 32]> = None;
 
 pub const ADDRESS_PAYLOAD_LEN: usize = 32;
 
@@ -64,6 +68,7 @@ pub struct Network {
     pub decimals: u8,
     pub is_mainnet: bool,
     pub genesis_hash: Option<[u8; 32]>,
+    pub roster_commitment: Option<[u8; 32]>,
 }
 
 impl Network {
@@ -77,6 +82,7 @@ impl Network {
             decimals: DECIMALS,
             is_mainnet: false,
             genesis_hash: TESTNET_GENESIS_HASH,
+            roster_commitment: TESTNET_ROSTER_COMMITMENT,
         }
     }
 
@@ -90,6 +96,7 @@ impl Network {
             decimals: DECIMALS,
             is_mainnet: true,
             genesis_hash: MAINNET_GENESIS_HASH,
+            roster_commitment: MAINNET_ROSTER_COMMITMENT,
         }
     }
 
@@ -103,6 +110,7 @@ impl Network {
             decimals: DECIMALS,
             is_mainnet: false,
             genesis_hash: None,
+            roster_commitment: None,
         }
     }
 }
@@ -646,6 +654,7 @@ pub struct NodeInfo {
     pub denomination: String,
     pub transfer_fee: u128,
     pub version: String,
+    pub protocol: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -1228,7 +1237,20 @@ pub fn parse_node_info(response: &str) -> Result<NodeInfo, String> {
         denomination: field_str(&v, "denomination")?,
         transfer_fee: field_u128(fee, "transfer_quon")?,
         version: field_str(&v, "version")?,
+        protocol: gateway_protocol(&v)?,
     })
+}
+
+pub const GATEWAY_PROTOCOL: u32 = 1;
+
+fn gateway_protocol(v: &Json) -> Result<u32, String> {
+    match v.get("protocol").and_then(Json::as_u64) {
+        Some(p) if p == u64::from(GATEWAY_PROTOCOL) => Ok(GATEWAY_PROTOCOL),
+        Some(p) => Err(format!(
+            "the gateway speaks protocol {p} but this client supports protocol {GATEWAY_PROTOCOL}, refusing to use it"
+        )),
+        None => Err("the gateway does not report its protocol version, refusing to use it".to_string()),
+    }
 }
 
 pub fn parse_account(response: &str) -> Result<Account, String> {
@@ -1336,8 +1358,17 @@ mod client {
         pinned_chain: std::cell::RefCell<Option<String>>,
         head_floor: std::cell::Cell<Option<(u64, std::time::Instant)>>,
         session: std::cell::RefCell<SigningSession>,
-        trusted_roster: std::cell::RefCell<Option<([u8; 32], Vec<crate::finality::RosterMember>)>>,
+        trusted_roster: std::cell::RefCell<Option<TrustedRosters>>,
     }
+
+    type TrustedRosters = (
+        [u8; 32],
+        std::collections::BTreeMap<u64, Vec<crate::finality::RosterMember>>,
+    );
+
+    type EpochRoster = ([u8; 32], Vec<crate::finality::RosterMember>);
+
+    const KEPT_ROSTERS: usize = 32;
 
     fn fresh(base: String, network: Network, acknowledge_mainnet: bool) -> Client {
         Client {
@@ -1551,8 +1582,16 @@ mod client {
             parse_submit(&self.rpc("submit_transaction", submit_body(tx_bytes))?)
         }
 
-        pub fn transaction(&self, tx_id: &str) -> Result<TxStatus, String> {
+        fn transaction_reported(&self, tx_id: &str) -> Result<TxStatus, String> {
             parse_transaction(&self.rpc("get_transaction", transaction_body(tx_id))?)
+        }
+
+        pub fn transaction(&self, tx_id: &str) -> Result<TxStatus, String> {
+            let status = self.transaction_reported(tx_id)?;
+            if matches!(status, TxStatus::Finalised { .. }) && self.anchor_pinned_roster()? {
+                self.confirm_transaction_trusted(tx_id)?;
+            }
+            Ok(status)
         }
 
         pub fn confirm_transaction(
@@ -1720,17 +1759,154 @@ mod client {
             genesis_hash: [u8; 32],
             roster: Vec<crate::finality::RosterMember>,
         ) -> Result<(), String> {
+            self.trust_roster_at(genesis_hash, 0, roster)
+        }
+
+        pub fn trust_roster_at(
+            &self,
+            genesis_hash: [u8; 32],
+            epoch: u64,
+            roster: Vec<crate::finality::RosterMember>,
+        ) -> Result<(), String> {
             if roster.is_empty() {
                 return Err("a trusted validator roster cannot be empty".to_string());
             }
-            *self.trusted_roster.borrow_mut() = Some((genesis_hash, roster));
+            let mut rosters = std::collections::BTreeMap::new();
+            rosters.insert(epoch, roster);
+            *self.trusted_roster.borrow_mut() = Some((genesis_hash, rosters));
             Ok(())
         }
 
-        fn verify_head(&self, info: &NodeInfo) -> Result<(), String> {
+        fn anchor_pinned_roster(&self) -> Result<bool, String> {
+            if self.trusted_roster.borrow().is_some() {
+                return Ok(true);
+            }
+            let (Some(genesis), Some(commitment)) =
+                (self.network.genesis_hash, self.network.roster_commitment)
+            else {
+                return Ok(false);
+            };
+            use crate::json::{object, parse, Json};
+            let answer = parse(&self.rpc(
+                "get_roster_proof",
+                object(vec![("epoch", Json::Int(0))]).render(),
+            )?)?;
+            let members = crate::finality::parse_roster(
+                &answer
+                    .get("members")
+                    .ok_or("the roster answer carries no members")?
+                    .render(),
+            )?;
+            if crate::finality::roster_commitment_of(0, &members) != commitment {
+                return Err(
+                    "the gateway offers a genesis roster other than the one pinned for this network, refusing to trust it"
+                        .to_string(),
+                );
+            }
+            self.trust_roster_at(genesis, 0, members)?;
+            Ok(true)
+        }
+
+        fn roster_for_epoch(
+            &self,
+            chain_id: u64,
+            epoch: u64,
+        ) -> Result<Option<EpochRoster>, String> {
             use crate::json::{from_hex, object, parse, Json};
-            let trusted = self.trusted_roster.borrow();
-            let Some((genesis_hash, roster)) = trusted.as_ref() else {
+            if !self.anchor_pinned_roster()? {
+                return Ok(None);
+            }
+            let (genesis, mut current) = {
+                let trusted = self.trusted_roster.borrow();
+                let Some((genesis, rosters)) = trusted.as_ref() else {
+                    return Ok(None);
+                };
+                let Some((start, members)) = rosters.range(..=epoch).next_back() else {
+                    return Err(format!(
+                        "the trusted roster starts after epoch {epoch}, so that epoch cannot be checked"
+                    ));
+                };
+                (
+                    *genesis,
+                    crate::finality::VerifiedRoster {
+                        epoch: *start,
+                        members: members.clone(),
+                    },
+                )
+            };
+            while current.epoch < epoch {
+                let next = current.epoch + 1;
+                let answer = parse(&self.rpc(
+                    "get_roster_proof",
+                    object(vec![("epoch", Json::Int(next))]).render(),
+                )?)?;
+                let field = |key: &str| -> Result<Vec<u8>, String> {
+                    from_hex(
+                        answer
+                            .get(key)
+                            .and_then(Json::as_str)
+                            .ok_or_else(|| format!("the roster answer carries no {key}"))?,
+                    )
+                };
+                let members = crate::finality::parse_roster(
+                    &answer
+                        .get("members")
+                        .ok_or("the roster answer carries no members")?
+                        .render(),
+                )?;
+                current = crate::finality::verify_next_roster(
+                    chain_id,
+                    &genesis,
+                    &current,
+                    &field("header_bytes")?,
+                    &field("certificate")?,
+                    members,
+                    &field("proof")?,
+                )?;
+                let mut trusted = self.trusted_roster.borrow_mut();
+                if let Some((_, rosters)) = trusted.as_mut() {
+                    rosters.insert(current.epoch, current.members.clone());
+                    while rosters.len() > KEPT_ROSTERS {
+                        let Some(oldest) = rosters.keys().nth(1).copied() else {
+                            break;
+                        };
+                        rosters.remove(&oldest);
+                    }
+                }
+            }
+            Ok(Some((genesis, current.members)))
+        }
+
+        fn certified_at(&self, height: u64) -> Result<(u64, Vec<u8>, Vec<u8>), String> {
+            use crate::json::{from_hex, object, parse, Json};
+            let finality = parse(&self.rpc(
+                "get_finality",
+                object(vec![("height", Json::Int(height))]).render(),
+            )?)?;
+            let epoch = finality
+                .get("epoch")
+                .and_then(Json::as_u64)
+                .ok_or("the finality answer names no epoch")?;
+            let header = from_hex(
+                finality
+                    .get("header_bytes")
+                    .and_then(Json::as_str)
+                    .ok_or("the finality answer carries no header")?,
+            )?;
+            let certificate = from_hex(
+                finality
+                    .get("certificate")
+                    .and_then(Json::as_str)
+                    .ok_or("the finality answer carries no certificate")?,
+            )?;
+            Ok((epoch, header, certificate))
+        }
+
+        fn verify_head(&self, info: &NodeInfo) -> Result<(), String> {
+            let chain_id = crate::checked_chain_id(&info.chain_id)?;
+            let (epoch, header, certificate) = if self.anchor_pinned_roster()? {
+                self.certified_at(info.head_height)?
+            } else {
                 if self.network.is_mainnet
                     || crate::is_mainnet_chain(&info.chain_id)
                     || self
@@ -1746,29 +1922,15 @@ mod client {
                 }
                 return Ok(());
             };
-            let chain_id = crate::checked_chain_id(&info.chain_id)?;
-            let finality = parse(&self.rpc(
-                "get_finality",
-                object(vec![("height", Json::Int(info.head_height))]).render(),
-            )?)?;
-            let header = from_hex(
-                finality
-                    .get("header_bytes")
-                    .and_then(Json::as_str)
-                    .ok_or("the finality answer carries no header")?,
-            )?;
-            let certificate = from_hex(
-                finality
-                    .get("certificate")
-                    .and_then(Json::as_str)
-                    .ok_or("the finality answer carries no certificate")?,
-            )?;
+            let Some((genesis_hash, roster)) = self.roster_for_epoch(chain_id, epoch)? else {
+                return Err("no trusted validator roster is held".to_string());
+            };
             let verified = crate::finality::verify_finality(
                 chain_id,
-                genesis_hash,
+                &genesis_hash,
                 &header,
                 &certificate,
-                roster,
+                &roster,
             )?;
             if verified.height != info.head_height {
                 return Err(format!(
@@ -1777,6 +1939,66 @@ mod client {
                 ));
             }
             Ok(())
+        }
+
+        pub fn verified_account(
+            &self,
+            address: &str,
+        ) -> Result<crate::finality::VerifiedAccount, String> {
+            use crate::json::{from_hex, object, parse, Json};
+            let info = self.node_info()?;
+            let chain_id = crate::checked_chain_id(&info.chain_id)?;
+            let answer = parse(&self.rpc(
+                "get_account_proof",
+                object(vec![("address", Json::str(address))]).render(),
+            )?)?;
+            let epoch = answer
+                .get("epoch")
+                .and_then(Json::as_u64)
+                .ok_or("the account proof names no epoch")?;
+            let field = |key: &str| -> Result<Vec<u8>, String> {
+                from_hex(
+                    answer
+                        .get(key)
+                        .and_then(Json::as_str)
+                        .ok_or_else(|| format!("the account proof carries no {key}"))?,
+                )
+            };
+            let Some((genesis_hash, members)) = self.roster_for_epoch(chain_id, epoch)? else {
+                return Err(
+                    "a verified balance needs a trusted validator roster, call trust_roster first"
+                        .to_string(),
+                );
+            };
+            crate::finality::verify_account(
+                chain_id,
+                &genesis_hash,
+                &crate::finality::VerifiedRoster { epoch, members },
+                address,
+                &field("header_bytes")?,
+                &field("certificate")?,
+                &field("proof")?,
+            )
+        }
+
+        pub fn confirm_transaction_trusted(
+            &self,
+            tx_id: &str,
+        ) -> Result<crate::finality::ConfirmedTransaction, String> {
+            let info = self.node_info()?;
+            let chain_id = crate::checked_chain_id(&info.chain_id)?;
+            let status = self.transaction_reported(tx_id)?;
+            let TxStatus::Finalised { height, .. } = status else {
+                return Err("the transaction is not reported as finalised".to_string());
+            };
+            let (epoch, _, _) = self.certified_at(height)?;
+            let Some((genesis_hash, roster)) = self.roster_for_epoch(chain_id, epoch)? else {
+                return Err(
+                    "a verified confirmation needs a trusted validator roster, call trust_roster first"
+                        .to_string(),
+                );
+            };
+            self.confirm_transaction(tx_id, &genesis_hash, &roster)
         }
 
         fn validity(&self, info: &NodeInfo) -> Result<u64, String> {
@@ -2434,6 +2656,7 @@ mod client {
                 denomination: DENOMINATION.to_string(),
                 transfer_fee: 500,
                 version: String::new(),
+                protocol: GATEWAY_PROTOCOL,
             }
         }
 
@@ -2624,7 +2847,7 @@ mod client {
         fn node_info_reply(chain: &str, head: u64) -> String {
             format!(
                 "{{\"chain_id\":\"{chain}\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"head_height\":{head},\
-                 \"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"500\"}},\"version\":\"t\"}}"
+                 \"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"500\"}},\"version\":\"t\",\"protocol\":1}}"
             )
         }
 
@@ -3457,6 +3680,7 @@ mod tests {
             denomination: String::new(),
             transfer_fee: 0,
             version: String::new(),
+            protocol: GATEWAY_PROTOCOL,
         };
         let client = Client::new("http://127.0.0.1:8645");
         assert!(
@@ -3483,6 +3707,7 @@ mod tests {
             denomination: String::new(),
             transfer_fee: 0,
             version: String::new(),
+            protocol: GATEWAY_PROTOCOL,
         };
         let mut network = Network::testnet();
         network.chain_id = Some(MAINNET_CHAIN_NAME.to_string());
@@ -3525,7 +3750,7 @@ mod wire_tests {
         }
         let info = |fee: &str| {
             format!(
-                "{{\"chain_id\":\"c\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"head_height\":1,\"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"{fee}\"}},\"version\":\"v\"}}"
+                "{{\"chain_id\":\"c\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"head_height\":1,\"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"{fee}\"}},\"version\":\"v\",\"protocol\":1}}"
             )
         };
         assert!(parse_node_info(&info("500")).is_ok());

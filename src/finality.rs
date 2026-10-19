@@ -6,6 +6,10 @@ use std::collections::BTreeSet;
 use qtv_attest::attestation::attestation_message;
 use qtv_attest::params::ATTEST_CONTEXT;
 use qtv_attest::{Attestation, Block, Envelope, Parent};
+use qtv_block::light::{
+    account_state_key, decode_account_leaf, roster_commitment, roster_commitment_key, AccountLeaf,
+    RosterEntry,
+};
 use qtv_block::{header_from_bytes, verify_inclusion, MerkleProof, MerkleStep};
 use qtv_codec::Decoder;
 use qtv_crypto::ml_dsa::{self, PUBLIC_KEY_BYTES, SIGNATURE_BYTES};
@@ -174,6 +178,117 @@ pub fn verify_finality(
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedRoster {
+    pub epoch: u64,
+    pub members: Vec<RosterMember>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedAccount {
+    pub address: String,
+    pub header: FinalizedHeader,
+    pub account: Option<AccountLeaf>,
+}
+
+fn roster_entries(members: &[RosterMember]) -> Vec<RosterEntry> {
+    members
+        .iter()
+        .map(|m| RosterEntry {
+            id: m.id,
+            stake: m.stake,
+            attest_pk: m.attest_pk.clone(),
+            root_digest: m.root.digest,
+            root_slots: m.root.slots,
+        })
+        .collect()
+}
+
+pub fn roster_commitment_of(epoch: u64, members: &[RosterMember]) -> [u8; 32] {
+    roster_commitment(epoch, &roster_entries(members))
+}
+
+fn state_proof(bytes: &[u8]) -> Result<qtv_state::Proof, String> {
+    qtv_codec::from_bytes(bytes).map_err(|_| "the state proof is malformed".to_string())
+}
+
+pub fn verify_next_roster(
+    chain_id: u64,
+    genesis_hash: &[u8; 32],
+    current: &VerifiedRoster,
+    header_bytes: &[u8],
+    certificate_bytes: &[u8],
+    next_members: Vec<RosterMember>,
+    proof_bytes: &[u8],
+) -> Result<VerifiedRoster, String> {
+    if next_members.is_empty() || next_members.len() > MAX_ROSTER {
+        return Err("the next validator roster is empty or too large".to_string());
+    }
+    let next = current
+        .epoch
+        .checked_add(1)
+        .ok_or("the roster epoch is at its limit")?;
+    let header = verify_finality(
+        chain_id,
+        genesis_hash,
+        header_bytes,
+        certificate_bytes,
+        &current.members,
+    )?;
+    let proof = state_proof(proof_bytes)?;
+    let expected = roster_commitment_of(next, &next_members);
+    if proof.value() != Some(&expected[..]) {
+        return Err(format!(
+            "the roster offered for epoch {next} is not the one the chain committed"
+        ));
+    }
+    if !qtv_state::verify(&roster_commitment_key(next), &proof, &header.q_root) {
+        return Err(format!(
+            "the roster commitment for epoch {next} is not proven against the finalized state"
+        ));
+    }
+    Ok(VerifiedRoster {
+        epoch: next,
+        members: next_members,
+    })
+}
+
+pub fn verify_account(
+    chain_id: u64,
+    genesis_hash: &[u8; 32],
+    roster: &VerifiedRoster,
+    address: &str,
+    header_bytes: &[u8],
+    certificate_bytes: &[u8],
+    proof_bytes: &[u8],
+) -> Result<VerifiedAccount, String> {
+    if !crate::valid_address(address) {
+        return Err("the address is not a Q1 address".to_string());
+    }
+    let header = verify_finality(
+        chain_id,
+        genesis_hash,
+        header_bytes,
+        certificate_bytes,
+        &roster.members,
+    )?;
+    let proof = state_proof(proof_bytes)?;
+    if !qtv_state::verify(&account_state_key(address), &proof, &header.q_root) {
+        return Err("the account is not proven against the finalized state".to_string());
+    }
+    let account = match proof.value() {
+        None => None,
+        Some(bytes) => {
+            Some(decode_account_leaf(bytes).ok_or("the proven account leaf is malformed")?)
+        }
+    };
+    Ok(VerifiedAccount {
+        address: address.to_string(),
+        header,
+        account,
+    })
+}
+
 pub fn verify_event(event_root: &[u8; 32], leaf: &[u8], steps: &[([u8; 32], bool)]) -> bool {
     if steps.len() > MAX_PROOF_STEPS {
         return false;
@@ -314,16 +429,27 @@ fn decode_certificate(bytes: &[u8]) -> Result<(Envelope, Vec<Attestation>), Stri
     if count > MAX_ATTESTATIONS {
         return Err("the certificate carries too many attestations".to_string());
     }
-    let mut attestations = Vec::new();
+    let mut attestations: Vec<Attestation> = Vec::new();
     for _ in 0..count {
         attestations.push(decode_attestation(&mut decoder)?);
+    }
+    if attestations
+        .windows(2)
+        .any(|pair| pair[0].from > pair[1].from)
+    {
+        return Err("the certificate attestations are out of order".to_string());
     }
     let reveals = decoder.get_u64().map_err(codec)?;
     if reveals > MAX_COMMITTEE_REVEALS {
         return Err("the certificate carries too many committee reveals".to_string());
     }
+    let mut last_reveal = None;
     for _ in 0..reveals {
-        decoder.get_u64().map_err(codec)?;
+        let id = decoder.get_u64().map_err(codec)?;
+        if last_reveal.is_some_and(|last| id < last) {
+            return Err("the certificate committee reveals are out of order".to_string());
+        }
+        last_reveal = Some(id);
         decode_credential(&mut decoder)?;
     }
     decoder.finish().map_err(codec)?;
@@ -349,7 +475,7 @@ fn decode_block(decoder: &mut Decoder<'_>) -> Result<Block, String> {
     let parent_tag = decoder.get_u8().map_err(codec)?;
     let parent_value = read_value(decoder)?;
     let parent = match parent_tag {
-        PARENT_GENESIS => Parent::Genesis,
+        PARENT_GENESIS if parent_value == [0u8; 32] => Parent::Genesis,
         PARENT_VALUE => Parent::Value(parent_value),
         _ => return Err("the certificate block parent tag is unknown".to_string()),
     };

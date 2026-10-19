@@ -66,7 +66,7 @@ fn spawn_gateway(fee_quon: u128) -> (u16, Arc<AtomicUsize>) {
                 "/v1/node_info" => format!(
                     "{{\"chain_id\":\"Q-dev-net-1\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"head_height\":10,\
                      \"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"{fee_quon}\"}},\
-                     \"version\":\"test\"}}"
+                     \"version\":\"test\",\"protocol\":1}}"
                 ),
                 "/v1/get_account" => {
                     let addr = request
@@ -231,7 +231,7 @@ fn a_rejected_submission_does_not_free_a_signed_nonce_without_explicit_replaceme
             let body = match path {
                 "/v1/node_info" => "{\"chain_id\":\"Q-dev-net-1\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\
                      \"head_height\":10,\"denomination\":\"Quon\",\
-                     \"fee\":{\"transfer_quon\":\"500\"},\"version\":\"test\"}"
+                     \"fee\":{\"transfer_quon\":\"500\"},\"version\":\"test\",\"protocol\":1}"
                     .to_string(),
                 "/v1/get_account" => {
                     let addr = request
