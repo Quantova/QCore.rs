@@ -93,8 +93,12 @@ pub fn verify_finality(
         .map_err(|_| "the header bytes are malformed".to_string())?;
     let hash = header.hash();
     let (envelope, attestations) = decode_certificate(certificate_bytes)?;
-    if envelope.block.val != hash
-        || envelope.block.height != header.height()
+    let parent = if header.height() == 1 {
+        Parent::Genesis
+    } else {
+        Parent::Value(*header.parent_hash())
+    };
+    if envelope.block != Block::new(header.height(), hash, parent)
         || envelope.height != header.height()
     {
         return Err("the certificate does not name this header".to_string());
