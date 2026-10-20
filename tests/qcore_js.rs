@@ -117,7 +117,10 @@ fn the_transfer_body_reproduces_the_qcore_js_vector() {
 
 const BOUNDED_VALID_UNTIL: u64 = 300;
 
-const BOUNDED_TRANSFER_FEE: u128 = 500;
+// The flat network fee these frozen vectors are checked against. Protocol 2 signs exactly the flat
+// fee, and both vectors carry fee 1,000,000 in their signed body, so that is the flat fee here.
+// This is only the check input — the frozen tx ids and bytes do not contain it, so they are unchanged.
+const BOUNDED_TRANSFER_FEE: u128 = 1_000_000;
 
 const BOUNDED_TRANSFER_TX_ID: &str =
     "QTX1V23WH8YGGQ802J0FAWRXQ6M93AHE3XTKLUDL5HY7G6TM3Z2N0Q3SWSZRTQ";

@@ -73,7 +73,7 @@ fn spawn_gateway(fee_quon: u128) -> (u16, Arc<AtomicUsize>) {
                 "/v1/node_info" => format!(
                     "{{\"chain_id\":\"Q-dev-net-1\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"head_height\":10,\
                      \"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"{fee_quon}\"}},\
-                     \"version\":\"test\",\"protocol\":1}}"
+                     \"version\":\"test\",\"protocol\":2}}"
                 ),
                 "/v1/get_account" => {
                     let addr = request
@@ -248,7 +248,7 @@ fn a_rejected_submission_does_not_free_a_signed_nonce_without_explicit_replaceme
             let body = match path {
                 "/v1/node_info" => "{\"chain_id\":\"Q-dev-net-1\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\
                      \"head_height\":10,\"denomination\":\"Quon\",\
-                     \"fee\":{\"transfer_quon\":\"500\"},\"version\":\"test\",\"protocol\":1}"
+                     \"fee\":{\"transfer_quon\":\"500\"},\"version\":\"test\",\"protocol\":2}"
                     .to_string(),
                 "/v1/get_account" => {
                     let addr = request
@@ -304,17 +304,23 @@ fn a_rejected_submission_does_not_free_a_signed_nonce_without_explicit_replaceme
 }
 
 #[test]
-fn a_contract_call_refuses_a_ceiling_below_its_meter_fee() {
+fn a_contract_call_pays_the_flat_fee_and_refuses_a_ceiling_below_it() {
+    // Protocol 2: a contract call pays exactly the flat transfer fee (500 here) at any meter, so a
+    // ceiling below the flat fee is refused and nothing is submitted, while a ceiling at the flat
+    // fee is enough even for a call metered far above one transfer.
     let (port, submits) = spawn_gateway(500);
     let client = Client::new(format!("http://127.0.0.1:{port}"));
     let seed = [11u8; 32];
     let to = account_address(&seed, 1);
     let err = client
-        .call_payable_expecting(&seed, 0, &to, vec![1], 0, 21_000, 1000, None)
-        .expect_err("the meter fee is above a ceiling of one transfer fee");
+        .call_payable_expecting(&seed, 0, &to, vec![1], 0, 21_000, 499, None)
+        .expect_err("a ceiling below the flat fee is refused");
     assert!(err.contains("above the maximum"), "unexpected error: {err}");
     assert_eq!(submits.load(Ordering::SeqCst), 0);
-    assert!(client
-        .call_payable_expecting(&seed, 0, &to, vec![1], 0, 21_000, 9_000, Some(0))
-        .is_ok());
+    assert!(
+        client
+            .call_payable_expecting(&seed, 0, &to, vec![1], 0, 21_000, 500, Some(0))
+            .is_ok(),
+        "the flat fee alone pays for a 21,000-meter call (it was 18x under metering)"
+    );
 }

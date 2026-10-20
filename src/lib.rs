@@ -234,7 +234,14 @@ fn check_call_under(
     let required = vm_call_fee(transfer_fee, meter_limit);
     if fee < required {
         return Err(format!(
-            "the fee {fee} is below the {required} a call metered at {meter_limit} pays at a transfer fee of {transfer_fee}, refusing to sign a call the chain would reject"
+            "the fee {fee} is below the flat network fee {required}, refusing to sign a call the chain would reject"
+        ));
+    }
+    // Protocol 2: a call pays exactly the flat fee. A larger fee is never needed, so never sign
+    // one — nobody can pay more to jump the queue, and a hostile caller cannot inflate it.
+    if fee > required {
+        return Err(format!(
+            "the fee {fee} is above the flat network fee {required}; every transaction pays exactly the locked fee, refusing to sign"
         ));
     }
     Ok(())
@@ -620,10 +627,16 @@ pub fn valid_until_from(info: &NodeInfo) -> u64 {
     info.head_height.saturating_add(DEFAULT_VALIDITY_BLOCKS)
 }
 
-pub fn vm_call_fee(transfer_fee: u128, meter_limit: u64) -> u128 {
-    transfer_fee.saturating_mul(u128::from(
-        meter_limit.div_ceil(NATIVE_TRANSFER_METER).max(1),
-    ))
+/// The fee a contract call pays. Protocol 2 locks every transaction — native transfers and
+/// contract calls alike — to the network's single flat transfer fee, which the chain holds inside
+/// its USD-locked band and never raises for congestion. The meter limit still bounds how much
+/// work a call may do (it is checked separately against the chain's ceilings), but it no longer
+/// multiplies the fee: a call costs exactly the flat transfer fee, never more.
+///
+/// (Protocol 1 charged transfer_fee x ceil(meter_limit / NATIVE_TRANSFER_METER), which put a
+/// token transfer at ~4,959x and a max-meter deploy at ~41,323x the locked fee.)
+pub fn vm_call_fee(transfer_fee: u128, _meter_limit: u64) -> u128 {
+    transfer_fee
 }
 
 #[cfg(feature = "client")]
@@ -1267,7 +1280,10 @@ pub fn parse_node_info(response: &str) -> Result<NodeInfo, String> {
     })
 }
 
-pub const GATEWAY_PROTOCOL: u32 = 1;
+/// Protocol 2 = every transaction pays the single flat, USD-locked network fee (contract calls are
+/// no longer metered into the fee). A client on protocol 2 refuses a protocol-1 gateway and vice
+/// versa, so a wallet never signs a flat fee against a node that still meters calls.
+pub const GATEWAY_PROTOCOL: u32 = 2;
 
 fn gateway_protocol(v: &Json) -> Result<u32, String> {
     match v.get("protocol").and_then(Json::as_u64) {
@@ -2873,7 +2889,7 @@ mod client {
         fn node_info_reply(chain: &str, head: u64) -> String {
             format!(
                 "{{\"chain_id\":\"{chain}\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"head_height\":{head},\
-                 \"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"500\"}},\"version\":\"t\",\"protocol\":1}}"
+                 \"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"500\"}},\"version\":\"t\",\"protocol\":2}}"
             )
         }
 
@@ -2921,11 +2937,14 @@ mod tests {
     }
 
     #[test]
-    fn a_contract_call_pays_one_transfer_fee_per_transfer_meter() {
+    fn every_contract_call_pays_exactly_the_flat_locked_fee_whatever_its_meter() {
+        // Protocol 2: the meter bounds the work, never the fee.
         assert_eq!(vm_call_fee(500, 1), 500);
         assert_eq!(vm_call_fee(500, NATIVE_TRANSFER_METER), 500);
-        assert_eq!(vm_call_fee(500, NATIVE_TRANSFER_METER + 1), 1_000);
-        assert_eq!(vm_call_fee(500, 12_000_000), 500 * 9_918);
+        assert_eq!(vm_call_fee(500, NATIVE_TRANSFER_METER + 1), 500);
+        assert_eq!(vm_call_fee(500, 6_000_000), 500); // a token transfer (was 500 x 4,959)
+        assert_eq!(vm_call_fee(500, MAX_METER_LIMIT), 500);
+        assert_eq!(vm_call_fee(500, MAX_DEPLOY_METER_LIMIT), 500); // a max deploy (was 500 x 41,323)
     }
 
     #[test]
@@ -2982,43 +3001,64 @@ mod tests {
         assert_eq!(MAX_DEPLOY_METER_LIMIT, 50_000_000);
         assert!(call(vec![0; MAX_CALL_ARGS], 21_000, vm_call_fee(500, 21_000)).is_ok());
         assert!(call(vec![0; MAX_CALL_ARGS + 1], 21_000, vm_call_fee(500, 21_000)).is_err());
-        let underpriced = call(vec![1], 21_000, 500).unwrap_err();
+        // Below the flat fee: the chain would reject it.
+        let underpriced = call(vec![1], 21_000, 499).unwrap_err();
         assert!(underpriced.contains("below"), "{underpriced}");
+        // Above the flat fee: never signed — nobody can pay more to jump the queue.
+        let overpriced = call(vec![1], 21_000, 501).unwrap_err();
+        assert!(overpriced.contains("above"), "{overpriced}");
+        assert!(
+            call(vec![1], 6_000_000, 500 * 4_959).is_err(),
+            "the old metered token fee is refused"
+        );
         assert!(call(vec![1], 21_000, vm_call_fee(500, 21_000) - 1).is_err());
         assert!(call(vec![1], 21_000, vm_call_fee(500, 21_000)).is_ok());
-        assert!(sign_asset_call(
-            &seed,
-            0,
-            &target,
-            vec![1],
-            &target,
-            5,
-            0,
-            21_000,
-            500,
-            LOCAL_CHAIN_ID,
-            300,
-            500,
-            0,
-            &[0u8; 32],
-        )
-        .is_err());
-        assert!(sign_payable_call(
-            &seed,
-            0,
-            &target,
-            vec![1],
-            5,
-            0,
-            5_000_000,
-            500,
-            LOCAL_CHAIN_ID,
-            300,
-            500,
-            0,
-            &[0u8; 32],
-        )
-        .is_err());
+        // Asset and payable calls follow the same flat rule: below the flat fee is refused, the
+        // flat fee itself is accepted at any meter (a 5M-meter call pays 500, not 500 x 4,133).
+        let asset = |fee: u128| {
+            sign_asset_call(
+                &seed,
+                0,
+                &target,
+                vec![1],
+                &target,
+                5,
+                0,
+                21_000,
+                fee,
+                LOCAL_CHAIN_ID,
+                300,
+                500,
+                0,
+                &[0u8; 32],
+            )
+        };
+        assert!(asset(499).is_err());
+        assert!(asset(500).is_ok());
+        assert!(asset(501).is_err());
+        let payable = |fee: u128| {
+            sign_payable_call(
+                &seed,
+                0,
+                &target,
+                vec![1],
+                5,
+                0,
+                5_000_000,
+                fee,
+                LOCAL_CHAIN_ID,
+                300,
+                500,
+                0,
+                &[0u8; 32],
+            )
+        };
+        assert!(payable(499).is_err());
+        assert!(payable(500).is_ok());
+        assert!(
+            payable(500 * 4_133).is_err(),
+            "the old metered fee is refused"
+        );
     }
 
     #[test]
@@ -3394,7 +3434,8 @@ mod tests {
             750,
             LOCAL_CHAIN_ID,
             300,
-            500,
+            // Protocol 2: the call pays exactly the flat fee, so the flat fee here is the body's 750.
+            750,
             0,
             &[0u8; 32],
         )
@@ -3798,7 +3839,7 @@ mod wire_tests {
         }
         let info = |fee: &str| {
             format!(
-                "{{\"chain_id\":\"c\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"head_height\":1,\"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"{fee}\"}},\"version\":\"v\",\"protocol\":1}}"
+                "{{\"chain_id\":\"c\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"head_height\":1,\"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"{fee}\"}},\"version\":\"v\",\"protocol\":2}}"
             )
         };
         assert!(parse_node_info(&info("500")).is_ok());

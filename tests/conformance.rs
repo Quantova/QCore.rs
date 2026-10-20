@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use qcore::json::{self, Json};
-use qcore::{account_address, sign_payable_call, LOCAL_CHAIN_ID, NATIVE_TRANSFER_METER, SEED_LEN};
+use qcore::{account_address, sign_payable_call, LOCAL_CHAIN_ID, SEED_LEN};
 use qtv_tx::{Body, Call};
 
 fn unsigned_part(tx: &[u8]) -> &[u8] {
@@ -121,7 +121,9 @@ fn the_frozen_vectors_reproduce_from_the_signing_core() {
             "{name} signed bytes"
         );
 
-        let transfer_fee = fee / u128::from(meter_limit.div_ceil(NATIVE_TRANSFER_METER).max(1));
+        // Protocol 2 locks every call to the flat network fee, so the call's fee IS the transfer fee.
+        // (The frozen signed bytes above take the fee as an input, so they do not depend on the model.)
+        let transfer_fee = fee;
         assert!(
             sign_payable_call(
                 &seed,
