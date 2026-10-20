@@ -11,7 +11,7 @@ mod http;
 use json::{object, to_hex, Json};
 use qtv_account::derive;
 use qtv_codec::{to_bytes, Encoder};
-use qtv_tx::{try_sign, Body, Call};
+use qtv_tx::{try_sign_hedged, Body, Call, Wrapper};
 use qtv_wipe::Zeroizing;
 
 pub use qtv_tx::{
@@ -384,6 +384,34 @@ pub fn check_gateway_json(response: &str) -> Result<(), String> {
     json::parse(response).map(|_| ())
 }
 
+static ENTROPY_SOURCE: std::sync::OnceLock<fn(&mut [u8]) -> bool> = std::sync::OnceLock::new();
+
+pub fn set_entropy_source(source: fn(&mut [u8]) -> bool) -> bool {
+    ENTROPY_SOURCE.set(source).is_ok()
+}
+
+pub fn fresh_randomness() -> Result<Zeroizing<[u8; 32]>, String> {
+    let mut rnd = Zeroizing::new([0u8; 32]);
+    let filled = match ENTROPY_SOURCE.get() {
+        Some(source) => source(&mut rnd[..]),
+        None => qtv_crypto::rng::try_fill_random(&mut rnd[..]).is_ok(),
+    };
+    if !filled || rnd.iter().all(|&b| b == 0) {
+        return Err("no secure random source is available, refusing to sign".to_string());
+    }
+    Ok(rnd)
+}
+
+fn sign_fresh(
+    sender: &qtv_account::Account,
+    body: &Body,
+    genesis: &[u8; 32],
+) -> Result<Wrapper, String> {
+    let rnd = fresh_randomness()?;
+    try_sign_hedged(sender, body, genesis, &rnd)
+        .ok_or_else(|| "the sender or the target is not a q1 address".to_string())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sign_native(
     seed: &[u8; SEED_LEN],
@@ -428,8 +456,7 @@ fn sign_native(
         qtv_tx::KIND_TRANSFER
     })
     .valid_until(valid_until);
-    let wrapper = try_sign(&sender, &body, genesis)
-        .ok_or_else(|| "the sender or the target is not a q1 address".to_string())?;
+    let wrapper = sign_fresh(&sender, &body, genesis)?;
     Ok(SignedTransfer {
         from: sender.address(),
         tx_id: wrapper.id(),
@@ -516,8 +543,7 @@ pub fn sign_asset_call(
     .calling()
     .carrying(issuer32)
     .valid_until(valid_until);
-    let wrapper = try_sign(&sender, &body, genesis)
-        .ok_or_else(|| "the sender or the target is not a q1 address".to_string())?;
+    let wrapper = sign_fresh(&sender, &body, genesis)?;
     Ok(SignedTransfer {
         from: sender.address(),
         tx_id: wrapper.id(),
@@ -2887,6 +2913,13 @@ mod client {
 mod tests {
     use super::*;
 
+    fn unsigned_part(tx: &[u8]) -> &[u8] {
+        let mut tail = Encoder::new();
+        tail.put_u8(0);
+        tail.put_bytes(&[0u8; qtv_crypto::ml_dsa::SIGNATURE_BYTES]);
+        &tx[..tx.len() - tail.into_bytes().len()]
+    }
+
     #[test]
     fn a_contract_call_pays_one_transfer_fee_per_transfer_meter() {
         assert_eq!(vm_call_fee(500, 1), 500);
@@ -3314,8 +3347,10 @@ mod tests {
             &[0u8; 32],
         )
         .unwrap();
-        assert_eq!(free.tx_bytes, payable_zero.tx_bytes);
-        assert_eq!(free.tx_id, payable_zero.tx_id);
+        assert_eq!(
+            unsigned_part(&free.tx_bytes),
+            unsigned_part(&payable_zero.tx_bytes)
+        );
         let funded = sign_payable_call(
             &seed,
             0,
@@ -3345,7 +3380,8 @@ mod tests {
         let body = Body::with_context(sender.address(), 4, 1210, 750, call, 2500, LOCAL_CHAIN_ID)
             .calling()
             .valid_until(300);
-        let wrapper = try_sign(&sender, &body, &[0u8; 32]).expect("the test addresses parse");
+        let wrapper =
+            qtv_tx::try_sign(&sender, &body, &[0u8; 32]).expect("the test addresses parse");
         assert!(qtv_tx::verify(&wrapper, sender.public_key(), &[0u8; 32]));
         let signed = sign_payable_call(
             &seed,
@@ -3363,8 +3399,17 @@ mod tests {
             &[0u8; 32],
         )
         .unwrap();
-        assert_eq!(signed.tx_bytes, to_bytes(&wrapper));
-        assert_eq!(signed.tx_id, wrapper.id());
+        let body_bytes = to_bytes(wrapper.body());
+        assert_eq!(&signed.tx_bytes[..body_bytes.len()], &body_bytes[..]);
+        let mut rest = qtv_codec::Decoder::new(&signed.tx_bytes[body_bytes.len()..]);
+        let scheme = rest.get_u8().unwrap();
+        let signature = rest.get_bytes().unwrap().to_vec();
+        rest.finish().unwrap();
+        let decoded = Wrapper::new(wrapper.body().clone(), scheme, signature);
+        assert!(qtv_tx::verify(&decoded, sender.public_key(), &[0u8; 32]));
+        assert_eq!(signed.tx_bytes, to_bytes(&decoded));
+        assert_eq!(signed.tx_id, decoded.id());
+        assert_ne!(signed.tx_bytes, to_bytes(&wrapper));
     }
 
     #[test]
@@ -3448,7 +3493,8 @@ mod tests {
             0,
             testnet_chain_id(),
         );
-        let wrapper = try_sign(&sender, &body, &[9u8; 32]).expect("the test addresses parse");
+        let wrapper =
+            qtv_tx::try_sign(&sender, &body, &[9u8; 32]).expect("the test addresses parse");
         assert!(qtv_tx::verify(&wrapper, sender.public_key(), &[9u8; 32]));
 
         let swapped_chain = qtv_tx::Wrapper::new(
@@ -3524,8 +3570,10 @@ mod tests {
             &[0u8; 32],
         )
         .unwrap();
-        assert_eq!(upper.tx_bytes, lower.tx_bytes);
-        assert_eq!(upper.tx_id, lower.tx_id);
+        assert_eq!(
+            unsigned_part(&upper.tx_bytes),
+            unsigned_part(&lower.tx_bytes)
+        );
     }
 
     #[test]

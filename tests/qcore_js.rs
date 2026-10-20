@@ -5,7 +5,32 @@ use qcore::{
     account_address, chain_id_from_name, sign_call, sign_payable_call, vm_call_fee, LOCAL_CHAIN_ID,
     SEED_LEN,
 };
-use qtv_tx::{try_sign, Body, Call, TESTNET_CHAIN_ID};
+use qtv_tx::{Body, Call, TESTNET_CHAIN_ID};
+
+fn unsigned_part(tx: &[u8]) -> &[u8] {
+    let mut tail = qtv_codec::Encoder::new();
+    tail.put_u8(0);
+    tail.put_bytes(&[0u8; qtv_crypto::ml_dsa::SIGNATURE_BYTES]);
+    &tx[..tx.len() - tail.into_bytes().len()]
+}
+
+fn signature_verifies(tx: &[u8], body: &Body, public_key: &[u8], genesis: &[u8; 32]) -> bool {
+    let mut rest = qtv_codec::Decoder::new(&tx[unsigned_part(tx).len()..]);
+    let (Ok(scheme), Ok(signature)) = (rest.get_u8(), rest.get_bytes()) else {
+        return false;
+    };
+    let wrapper = qtv_tx::Wrapper::new(body.clone(), scheme, signature.to_vec());
+    qtv_tx::verify(&wrapper, public_key, genesis)
+}
+
+#[allow(deprecated)]
+fn reference_sign(
+    account: &qtv_account::Account,
+    body: &Body,
+    genesis: &[u8; 32],
+) -> qtv_tx::Wrapper {
+    qtv_tx::sign(account, body, genesis)
+}
 
 const VECTOR_CHAIN_ID: u64 = 4_032_652_574_364_075_694;
 
@@ -49,7 +74,7 @@ fn the_transfer_body_reproduces_the_qcore_js_vector() {
         LOCAL_CHAIN_ID,
     )
     .calling();
-    let frozen = try_sign(&sender, &body, &[0u8; 32]).expect("the vector addresses parse");
+    let frozen = reference_sign(&sender, &body, &[0u8; 32]);
     let body_bytes = "20000000000000008c705c118414c1e32a977ca4ee36fc3f2888b67ec031596abf4ac70e5f5a14f00300000000000000085200000000000040420f000000000000000000000000002000000000000000ba83f436d6f46e181c3bae40ba4ffedb0f62e67cde1a0c558f459b996229593b0400000000000000deadbeef000000000000000098ba0ce08f27d0be0000000000000000000000000000000001";
     assert_eq!(hex(&qtv_codec::to_bytes(&body)), body_bytes);
     assert!(
@@ -75,11 +100,19 @@ fn the_transfer_body_reproduces_the_qcore_js_vector() {
         &[0u8; 32],
     )
     .unwrap();
-    let bounded = try_sign(&sender, &body.valid_until(BOUNDED_VALID_UNTIL), &[0u8; 32])
-        .expect("the vector addresses parse");
-    assert_eq!(signed.tx_bytes, qtv_codec::to_bytes(&bounded));
-    assert_eq!(signed.tx_id, BOUNDED_TRANSFER_TX_ID);
-    assert_eq!(hex(&signed.tx_bytes), BOUNDED_TRANSFER_TX_HEX);
+    let bounded = reference_sign(&sender, &body.valid_until(BOUNDED_VALID_UNTIL), &[0u8; 32]);
+    assert_eq!(bounded.id(), BOUNDED_TRANSFER_TX_ID);
+    assert_eq!(hex(&qtv_codec::to_bytes(&bounded)), BOUNDED_TRANSFER_TX_HEX);
+    assert_eq!(
+        unsigned_part(&signed.tx_bytes),
+        unsigned_part(&qtv_codec::to_bytes(&bounded))
+    );
+    assert!(signature_verifies(
+        &signed.tx_bytes,
+        bounded.body(),
+        sender.public_key(),
+        &[0u8; 32]
+    ));
 }
 
 const BOUNDED_VALID_UNTIL: u64 = 300;
@@ -112,7 +145,7 @@ fn the_bounded_payable_transaction_reproduces_the_qcore_js_vector() {
     )
     .calling()
     .valid_until(BOUNDED_VALID_UNTIL);
-    let bounded = try_sign(&sender, &body, &[0u8; 32]).expect("the vector addresses parse");
+    let bounded = reference_sign(&sender, &body, &[0u8; 32]);
     let signed = sign_payable_call(
         &seed,
         7,
@@ -129,9 +162,18 @@ fn the_bounded_payable_transaction_reproduces_the_qcore_js_vector() {
         &[0u8; 32],
     )
     .unwrap();
-    assert_eq!(signed.tx_bytes, qtv_codec::to_bytes(&bounded));
-    assert_eq!(signed.tx_id, BOUNDED_PAYABLE_TX_ID);
-    assert_eq!(hex(&signed.tx_bytes), BOUNDED_PAYABLE_TX_HEX);
+    assert_eq!(bounded.id(), BOUNDED_PAYABLE_TX_ID);
+    assert_eq!(hex(&qtv_codec::to_bytes(&bounded)), BOUNDED_PAYABLE_TX_HEX);
+    assert_eq!(
+        unsigned_part(&signed.tx_bytes),
+        unsigned_part(&qtv_codec::to_bytes(&bounded))
+    );
+    assert!(signature_verifies(
+        &signed.tx_bytes,
+        bounded.body(),
+        sender.public_key(),
+        &[0u8; 32]
+    ));
 }
 
 #[test]
@@ -150,7 +192,7 @@ fn the_payable_transaction_reproduces_the_qcore_js_vector() {
         VECTOR_CHAIN_ID,
     )
     .calling();
-    let wrapper = try_sign(&sender, &body, &[0u8; 32]).expect("the vector addresses parse");
+    let wrapper = reference_sign(&sender, &body, &[0u8; 32]);
     assert!(qtv_tx::verify(&wrapper, sender.public_key(), &[0u8; 32]));
     assert_eq!(
         wrapper.id(),
@@ -194,8 +236,10 @@ fn the_target_case_never_moves_the_signed_bytes() {
         &[0u8; 32],
     )
     .unwrap();
-    assert_eq!(signed_upper.tx_bytes, signed_lower.tx_bytes);
-    assert_eq!(signed_upper.tx_id, signed_lower.tx_id);
+    assert_eq!(
+        unsigned_part(&signed_upper.tx_bytes),
+        unsigned_part(&signed_lower.tx_bytes)
+    );
 }
 
 #[test]

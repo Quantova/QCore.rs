@@ -3,7 +3,32 @@
 
 use qcore::json::{self, Json};
 use qcore::{account_address, sign_payable_call, LOCAL_CHAIN_ID, NATIVE_TRANSFER_METER, SEED_LEN};
-use qtv_tx::{try_sign, Body, Call};
+use qtv_tx::{Body, Call};
+
+fn unsigned_part(tx: &[u8]) -> &[u8] {
+    let mut tail = qtv_codec::Encoder::new();
+    tail.put_u8(0);
+    tail.put_bytes(&[0u8; qtv_crypto::ml_dsa::SIGNATURE_BYTES]);
+    &tx[..tx.len() - tail.into_bytes().len()]
+}
+
+fn signature_verifies(tx: &[u8], body: &Body, public_key: &[u8], genesis: &[u8; 32]) -> bool {
+    let mut rest = qtv_codec::Decoder::new(&tx[unsigned_part(tx).len()..]);
+    let (Ok(scheme), Ok(signature)) = (rest.get_u8(), rest.get_bytes()) else {
+        return false;
+    };
+    let wrapper = qtv_tx::Wrapper::new(body.clone(), scheme, signature.to_vec());
+    qtv_tx::verify(&wrapper, public_key, genesis)
+}
+
+#[allow(deprecated)]
+fn reference_sign(
+    account: &qtv_account::Account,
+    body: &Body,
+    genesis: &[u8; 32],
+) -> qtv_tx::Wrapper {
+    qtv_tx::sign(account, body, genesis)
+}
 
 const VECTORS: &str = include_str!("vectors.json");
 
@@ -88,8 +113,7 @@ fn the_frozen_vectors_reproduce_from_the_signing_core() {
             .calling()
             .valid_until(valid_until)
         };
-        let frozen =
-            try_sign(&sender, &chain_body(0), &[0u8; 32]).expect("the vector addresses parse");
+        let frozen = reference_sign(&sender, &chain_body(0), &[0u8; 32]);
         assert_eq!(frozen.id(), text(v, "tx_id"), "{name} transaction id");
         assert_eq!(
             hex(&qtv_codec::to_bytes(&frozen)),
@@ -133,14 +157,21 @@ fn the_frozen_vectors_reproduce_from_the_signing_core() {
             &[0u8; 32],
         )
         .unwrap();
-        let bounded =
-            try_sign(&sender, &chain_body(300), &[0u8; 32]).expect("the vector addresses parse");
+        let bounded = reference_sign(&sender, &chain_body(300), &[0u8; 32]);
         assert_eq!(signed.from, text(v, "from"), "{name} from");
-        assert_eq!(signed.tx_id, bounded.id(), "{name} bounded transaction id");
         assert_eq!(
-            signed.tx_bytes,
-            qtv_codec::to_bytes(&bounded),
+            unsigned_part(&signed.tx_bytes),
+            unsigned_part(&qtv_codec::to_bytes(&bounded)),
             "{name} the core signs the chain body byte for byte"
+        );
+        assert!(
+            signature_verifies(
+                &signed.tx_bytes,
+                bounded.body(),
+                sender.public_key(),
+                &[0u8; 32]
+            ),
+            "{name} the core signature verifies"
         );
 
         let lowered = target.to_ascii_lowercase();
@@ -161,9 +192,9 @@ fn the_frozen_vectors_reproduce_from_the_signing_core() {
         )
         .unwrap();
         assert_eq!(
-            recased.tx_bytes, signed.tx_bytes,
+            unsigned_part(&recased.tx_bytes),
+            unsigned_part(&signed.tx_bytes),
             "{name} case holds the bytes"
         );
-        assert_eq!(recased.tx_id, signed.tx_id, "{name} case holds the id");
     }
 }

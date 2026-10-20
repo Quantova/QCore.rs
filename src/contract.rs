@@ -465,13 +465,9 @@ pub fn build_typed_order_call(
         &values,
     );
 
-    let signature = ml_dsa::sign(
-        &secret,
-        &message,
-        qtv_vm::crypto::VM_VERIFY_CONTEXT,
-        &[0u8; 32],
-    )
-    .ok_or("signing the order message failed")?;
+    let rnd = crate::fresh_randomness()?;
+    let signature = ml_dsa::sign(&secret, &message, qtv_vm::crypto::VM_VERIFY_CONTEXT, &rnd)
+        .ok_or("signing the order message failed")?;
     debug_assert_eq!(
         signature.len(),
         qtv_vm::abi::ML_DSA_SIGNATURE_BYTES,
@@ -1723,8 +1719,14 @@ mod tests {
             TEST_EXPIRY,
         )
         .unwrap();
-        assert_eq!(word.call_args, typed.call_args);
         assert_eq!(word.message, typed.message);
+        assert_eq!(word.call_args.len(), typed.call_args.len());
+        let differing: Vec<usize> = (0..word.call_args.len())
+            .filter(|&i| word.call_args[i] != typed.call_args[i])
+            .collect();
+        if let (Some(first), Some(last)) = (differing.first(), differing.last()) {
+            assert!(last - first < qtv_vm::abi::ML_DSA_SIGNATURE_BYTES);
+        }
     }
 
     #[test]

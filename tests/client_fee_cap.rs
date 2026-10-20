@@ -11,6 +11,13 @@ use std::thread;
 
 use qcore::{account_address, Client, Submit};
 
+fn unsigned_part(tx: &[u8]) -> &[u8] {
+    let mut tail = qtv_codec::Encoder::new();
+    tail.put_u8(0);
+    tail.put_bytes(&[0u8; qtv_crypto::ml_dsa::SIGNATURE_BYTES]);
+    &tx[..tx.len() - tail.into_bytes().len()]
+}
+
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
@@ -169,7 +176,10 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
     let (signed, _) = client.transfer(&seed, 0, &to, 1000, 1000).unwrap();
     let expected =
         qcore::sign_transfer(&seed, 0, &to, 1000, 0, 500, chain_id, until, 0, &[0u8; 32]).unwrap();
-    assert_eq!(signed.tx_bytes, expected.tx_bytes);
+    assert_eq!(
+        unsigned_part(&signed.tx_bytes),
+        unsigned_part(&expected.tx_bytes)
+    );
 
     let client = Client::new(format!("http://127.0.0.1:{port}"));
     let (signed, _) = client
@@ -190,12 +200,18 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
         &[0u8; 32],
     )
     .unwrap();
-    assert_eq!(signed.tx_bytes, expected.tx_bytes);
+    assert_eq!(
+        unsigned_part(&signed.tx_bytes),
+        unsigned_part(&expected.tx_bytes)
+    );
 
     let client = Client::new(format!("http://127.0.0.1:{port}"));
     let (signed, _) = client.register(&seed, 0, 1000).unwrap();
     let expected = qcore::sign_register(&seed, 0, 0, 500, chain_id, until, 0, &[0u8; 32]).unwrap();
-    assert_eq!(signed.tx_bytes, expected.tx_bytes);
+    assert_eq!(
+        unsigned_part(&signed.tx_bytes),
+        unsigned_part(&expected.tx_bytes)
+    );
 
     assert!(
         qcore::sign_register(&seed, 0, 0, 500, chain_id, 0, 0, &[0u8; 32]).is_err(),
@@ -203,7 +219,8 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
     );
     let later = qcore::sign_register(&seed, 0, 0, 500, chain_id, until + 1, 0, &[0u8; 32]).unwrap();
     assert_ne!(
-        signed.tx_bytes, later.tx_bytes,
+        unsigned_part(&signed.tx_bytes),
+        unsigned_part(&later.tx_bytes),
         "the window is signed, not implied"
     );
 }
