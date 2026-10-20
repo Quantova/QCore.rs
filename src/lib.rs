@@ -32,7 +32,9 @@ pub const GENESIS_FLOOR_SECS: u64 = 1_735_689_600;
 
 pub const TESTNET_GENESIS_SECS: u64 = 1_791_082_813;
 
-pub const TESTNET_RPC_URL: &str = "https://rpc-testnet.quantova.org";
+pub const TESTNET_RPC_URL: &str = "https://q-test-net-01.quantova.org";
+
+pub const RETIRED_RPC_HOSTS: &[&str] = &["rpc-testnet.quantova.org"];
 
 pub const TESTNET_GENESIS_HASH: Option<[u8; 32]> = None;
 
@@ -330,7 +332,12 @@ pub fn shown(text: &str) -> String {
                 && !matches!(
                     *c,
                     '\u{ad}'
+                        | '\u{600}'..='\u{605}'
                         | '\u{61c}'
+                        | '\u{6dd}'
+                        | '\u{70f}'
+                        | '\u{890}'..='\u{891}'
+                        | '\u{8e2}'
                         | '\u{180e}'
                         | '\u{200b}'..='\u{200f}'
                         | '\u{2028}'..='\u{202e}'
@@ -338,6 +345,11 @@ pub fn shown(text: &str) -> String {
                         | '\u{2066}'..='\u{206f}'
                         | '\u{feff}'
                         | '\u{fff9}'..='\u{fffb}'
+                        | '\u{110bd}'
+                        | '\u{110cd}'
+                        | '\u{13430}'..='\u{1343f}'
+                        | '\u{1bca0}'..='\u{1bca3}'
+                        | '\u{1d173}'..='\u{1d17a}'
                         | '\u{e0001}'
                         | '\u{e0020}'..='\u{e007f}'
                 )
@@ -348,6 +360,27 @@ pub fn shown(text: &str) -> String {
     } else {
         clean
     }
+}
+
+pub fn check_endpoint(base: &str) -> Result<(), String> {
+    let rest = base.split_once("://").map_or(base, |(_, after)| after);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = if host_port.starts_with('[') {
+        host_port
+    } else {
+        host_port.split(':').next().unwrap_or("")
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if RETIRED_RPC_HOSTS.contains(&host.as_str()) {
+        return Err(format!(
+            "the endpoint {} served the retired Q-test-net-1 network, refusing to use it, the testnet is served at {TESTNET_RPC_URL}",
+            shown(&host)
+        ));
+    }
+    Ok(())
 }
 
 pub fn checked_chain_id(name: &str) -> Result<u64, String> {
@@ -1576,6 +1609,7 @@ mod client {
         }
 
         fn rpc(&self, method: &str, body: String) -> Result<String, String> {
+            crate::check_endpoint(&self.base)?;
             let (status, text) =
                 self.transport
                     .post(&self.base, &format!("/v1/{method}"), &body)?;
