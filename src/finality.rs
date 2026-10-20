@@ -96,7 +96,7 @@ pub fn verify_finality(
     let header = header_from_bytes(header_bytes)
         .map_err(|_| "the header bytes are malformed".to_string())?;
     let hash = header.hash();
-    let (envelope, attestations) = decode_certificate(certificate_bytes)?;
+    let (envelope, attestations, reveals) = decode_certificate(certificate_bytes)?;
     let parent = if header.height() == 1 {
         Parent::Genesis
     } else {
@@ -161,6 +161,15 @@ pub fn verify_finality(
             return Err("an attestation does not prove its committee membership".to_string());
         }
         signed = signed.saturating_add(u128::from(member.stake));
+    }
+    for (id, credential) in &reveals {
+        let member = roster
+            .iter()
+            .find(|m| m.id == *id)
+            .ok_or_else(|| "a committee reveal names a validator outside the roster".to_string())?;
+        if !verify_membership(&member.root, *id, envelope.slot, credential) {
+            return Err("a committee reveal does not prove its committee membership".to_string());
+        }
     }
     if signed.saturating_mul(3) < total.saturating_mul(2) {
         return Err("the attesting validators hold less than two thirds of the stake".to_string());
@@ -419,7 +428,9 @@ pub fn decode_event(leaf: &[u8]) -> Result<ChainEvent, String> {
     })
 }
 
-fn decode_certificate(bytes: &[u8]) -> Result<(Envelope, Vec<Attestation>), String> {
+type Reveal = (u64, Credential);
+
+fn decode_certificate(bytes: &[u8]) -> Result<(Envelope, Vec<Attestation>, Vec<Reveal>), String> {
     let mut decoder = Decoder::new(bytes);
     let envelope = decode_envelope(&mut decoder)?;
     if decoder.get_u8().map_err(codec)? != STAGE_ONE {
@@ -444,16 +455,17 @@ fn decode_certificate(bytes: &[u8]) -> Result<(Envelope, Vec<Attestation>), Stri
         return Err("the certificate carries too many committee reveals".to_string());
     }
     let mut last_reveal = None;
+    let mut revealed = Vec::new();
     for _ in 0..reveals {
         let id = decoder.get_u64().map_err(codec)?;
         if last_reveal.is_some_and(|last| id < last) {
             return Err("the certificate committee reveals are out of order".to_string());
         }
         last_reveal = Some(id);
-        decode_credential(&mut decoder)?;
+        revealed.push((id, decode_credential(&mut decoder)?));
     }
     decoder.finish().map_err(codec)?;
-    Ok((envelope, attestations))
+    Ok((envelope, attestations, revealed))
 }
 
 fn decode_envelope(decoder: &mut Decoder<'_>) -> Result<Envelope, String> {
