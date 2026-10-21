@@ -198,7 +198,14 @@ pub fn check_call(
     fee: u128,
     transfer_fee: u128,
 ) -> Result<(), String> {
-    check_call_under(MAX_METER_LIMIT, meter_limit, args_len, fee, transfer_fee)
+    check_call_under(
+        MAX_METER_LIMIT,
+        meter_limit,
+        args_len,
+        fee,
+        transfer_fee,
+        false,
+    )
 }
 
 pub fn check_call_to(
@@ -208,12 +215,13 @@ pub fn check_call_to(
     fee: u128,
     transfer_fee: u128,
 ) -> Result<(), String> {
-    let ceiling = if target == vm_deploy_address() {
+    let deploy = target == vm_deploy_address();
+    let ceiling = if deploy {
         MAX_DEPLOY_METER_LIMIT
     } else {
         MAX_METER_LIMIT
     };
-    check_call_under(ceiling, meter_limit, args_len, fee, transfer_fee)
+    check_call_under(ceiling, meter_limit, args_len, fee, transfer_fee, deploy)
 }
 
 fn check_call_under(
@@ -222,6 +230,7 @@ fn check_call_under(
     args_len: usize,
     fee: u128,
     transfer_fee: u128,
+    deploy: bool,
 ) -> Result<(), String> {
     if !(NATIVE_TRANSFER_METER..=ceiling).contains(&meter_limit) {
         return Err(format!(
@@ -236,10 +245,45 @@ fn check_call_under(
     let required = vm_call_fee(transfer_fee, meter_limit);
     if fee < required {
         return Err(format!(
-            "the fee {fee} is below the {required} a call metered at {meter_limit} pays at a transfer fee of {transfer_fee}, refusing to sign a call the chain would reject"
+            "the fee {fee} is below the flat network fee {required}, refusing to sign a call the chain would reject"
+        ));
+    }
+    if deploy && fee == required {
+        return Err(format!(
+            "the fee {fee} carries no deploy fee, a deploy pays the locked network fee {required} plus the frozen deploy fee, refusing to sign a deploy the chain would reject"
+        ));
+    }
+    if !deploy && fee > required {
+        return Err(format!(
+            "the fee {fee} is above the flat network fee {required}, every transaction pays exactly the locked fee, refusing to sign"
         ));
     }
     Ok(())
+}
+
+pub const DEPLOY_FEE_MICRO_USD: u128 = 5_000_000;
+
+pub fn deploy_fee_of(info: &NodeInfo) -> Result<u128, String> {
+    let (Some(fee), Some(rate), Some(unit)) = (
+        info.deploy_fee,
+        info.rate_micro_usd_per_qtov,
+        info.quon_per_qtov,
+    ) else {
+        return Err(
+            "the gateway does not report the deploy fee with its rate, refusing to sign a deploy"
+                .to_string(),
+        );
+    };
+    let expected = DEPLOY_FEE_MICRO_USD
+        .saturating_mul(unit)
+        .checked_div(rate)
+        .unwrap_or(0);
+    if rate == 0 || unit == 0 || fee != expected {
+        return Err(format!(
+            "the gateway asks a deploy fee of {fee} Quon, which is not the frozen five US dollars at its own rate, refusing to sign"
+        ));
+    }
+    Ok(fee)
 }
 
 fn check_deadline(valid_until: u64) -> Result<(), String> {
@@ -653,10 +697,8 @@ pub fn valid_until_from(info: &NodeInfo) -> u64 {
     info.head_height.saturating_add(DEFAULT_VALIDITY_BLOCKS)
 }
 
-pub fn vm_call_fee(transfer_fee: u128, meter_limit: u64) -> u128 {
-    transfer_fee.saturating_mul(u128::from(
-        meter_limit.div_ceil(NATIVE_TRANSFER_METER).max(1),
-    ))
+pub fn vm_call_fee(transfer_fee: u128, _meter_limit: u64) -> u128 {
+    transfer_fee
 }
 
 #[cfg(feature = "client")]
@@ -714,6 +756,9 @@ pub struct NodeInfo {
     pub transfer_fee: u128,
     pub version: String,
     pub protocol: u32,
+    pub deploy_fee: Option<u128>,
+    pub rate_micro_usd_per_qtov: Option<u128>,
+    pub quon_per_qtov: Option<u128>,
 }
 
 #[derive(Debug, Clone)]
@@ -1297,10 +1342,20 @@ pub fn parse_node_info(response: &str) -> Result<NodeInfo, String> {
         transfer_fee: field_u128(fee, "transfer_quon")?,
         version: field_str(&v, "version")?,
         protocol: gateway_protocol(&v)?,
+        deploy_fee: optional_u128(fee, "deploy_fee_quon")?,
+        rate_micro_usd_per_qtov: optional_u128(fee, "rate_micro_usd_per_qtov")?,
+        quon_per_qtov: optional_u128(fee, "quon_per_qtov")?,
     })
 }
 
-pub const GATEWAY_PROTOCOL: u32 = 1;
+fn optional_u128(v: &Json, key: &str) -> Result<Option<u128>, String> {
+    match v.get(key) {
+        None | Some(Json::Null) => Ok(None),
+        Some(_) => field_u128(v, key).map(Some),
+    }
+}
+
+pub const GATEWAY_PROTOCOL: u32 = 2;
 
 fn gateway_protocol(v: &Json) -> Result<u32, String> {
     match v.get("protocol").and_then(Json::as_u64) {
@@ -2148,7 +2203,15 @@ mod client {
             self.vet_target(&sender, &[target])?;
             let info = self.node_info()?;
             self.guard_mainnet()?;
-            let fee = self.fee_within(vm_call_fee(info.transfer_fee, meter_limit), max_fee)?;
+            let deploy_fee = if target == vm_deploy_address() {
+                deploy_fee_of(&info)?
+            } else {
+                0
+            };
+            let fee = self.fee_within(
+                vm_call_fee(info.transfer_fee, meter_limit).saturating_add(deploy_fee),
+                max_fee,
+            )?;
             let chain_id = self.signing_chain_id(&info)?;
             let valid_until = self.validity(&info)?;
             let nonce = self.checked_nonce(&sender, expected_nonce)?;
@@ -2570,7 +2633,10 @@ mod client {
             self.vet_target(&deployer, &[])?;
             let info = self.node_info()?;
             self.guard_mainnet()?;
-            let fee = self.fee_within(vm_call_fee(info.transfer_fee, meter_limit), max_fee)?;
+            let fee = self.fee_within(
+                vm_call_fee(info.transfer_fee, meter_limit).saturating_add(deploy_fee_of(&info)?),
+                max_fee,
+            )?;
             let chain_id = self.signing_chain_id(&info)?;
             let valid_until = self.validity(&info)?;
             let account_nonce = self.checked_nonce(&deployer, expected_nonce)?;
@@ -2717,6 +2783,9 @@ mod client {
                 transfer_fee: 500,
                 version: String::new(),
                 protocol: GATEWAY_PROTOCOL,
+                deploy_fee: None,
+                rate_micro_usd_per_qtov: None,
+                quon_per_qtov: None,
             }
         }
 
@@ -2907,7 +2976,7 @@ mod client {
         fn node_info_reply(chain: &str, head: u64) -> String {
             format!(
                 "{{\"chain_id\":\"{chain}\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"head_height\":{head},\
-                 \"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"500\"}},\"version\":\"t\",\"protocol\":1}}"
+                 \"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"500\"}},\"version\":\"t\",\"protocol\":2}}"
             )
         }
 
@@ -2955,11 +3024,42 @@ mod tests {
     }
 
     #[test]
-    fn a_contract_call_pays_one_transfer_fee_per_transfer_meter() {
+    fn every_contract_call_pays_exactly_the_flat_locked_fee_whatever_its_meter() {
         assert_eq!(vm_call_fee(500, 1), 500);
         assert_eq!(vm_call_fee(500, NATIVE_TRANSFER_METER), 500);
-        assert_eq!(vm_call_fee(500, NATIVE_TRANSFER_METER + 1), 1_000);
-        assert_eq!(vm_call_fee(500, 12_000_000), 500 * 9_918);
+        assert_eq!(vm_call_fee(500, NATIVE_TRANSFER_METER + 1), 500);
+        assert_eq!(vm_call_fee(500, 6_000_000), 500);
+        assert_eq!(vm_call_fee(500, MAX_METER_LIMIT), 500);
+        assert_eq!(vm_call_fee(500, MAX_DEPLOY_METER_LIMIT), 500);
+    }
+
+    #[test]
+    fn a_deploy_fee_is_signed_only_at_the_frozen_five_dollars() {
+        let info = |fee: Option<u128>, rate: Option<u128>| NodeInfo {
+            chain_id: "c".to_string(),
+            genesis_hash: "00".repeat(32),
+            head_height: 1,
+            denomination: "Quon".to_string(),
+            transfer_fee: 500,
+            version: "t".to_string(),
+            protocol: GATEWAY_PROTOCOL,
+            deploy_fee: fee,
+            rate_micro_usd_per_qtov: rate,
+            quon_per_qtov: Some(1_000_000),
+        };
+        assert_eq!(DEPLOY_FEE_MICRO_USD, 5_000_000);
+        assert_eq!(
+            deploy_fee_of(&info(Some(5_000_000), Some(1_000_000))),
+            Ok(5_000_000)
+        );
+        assert_eq!(
+            deploy_fee_of(&info(Some(2_500_000), Some(2_000_000))),
+            Ok(2_500_000)
+        );
+        assert!(deploy_fee_of(&info(Some(50_000_000), Some(1_000_000))).is_err());
+        assert!(deploy_fee_of(&info(None, Some(1_000_000))).is_err());
+        assert!(deploy_fee_of(&info(Some(5_000_000), None)).is_err());
+        assert!(deploy_fee_of(&info(Some(0), Some(0))).is_err());
     }
 
     #[test]
@@ -2994,7 +3094,7 @@ mod tests {
             vm_call_fee(500, MAX_METER_LIMIT + 1)
         )
         .is_err());
-        let deploy = |meter: u64| {
+        let deploy_paying = |meter: u64, fee: u128| {
             sign_call(
                 &seed,
                 0,
@@ -3002,7 +3102,7 @@ mod tests {
                 vec![1],
                 0,
                 meter,
-                vm_call_fee(500, meter),
+                fee,
                 LOCAL_CHAIN_ID,
                 300,
                 500,
@@ -3010,49 +3110,69 @@ mod tests {
                 &[0u8; 32],
             )
         };
+        let deploy = |meter: u64| deploy_paying(meter, vm_call_fee(500, meter) + 5_000_000);
+        let bare = deploy_paying(MAX_METER_LIMIT, vm_call_fee(500, MAX_METER_LIMIT)).unwrap_err();
+        assert!(bare.contains("deploy fee"), "{bare}");
         assert!(deploy(MAX_METER_LIMIT + 1).is_ok());
         assert!(deploy(MAX_DEPLOY_METER_LIMIT).is_ok());
         assert!(deploy(MAX_DEPLOY_METER_LIMIT + 1).is_err());
         assert_eq!(MAX_DEPLOY_METER_LIMIT, 50_000_000);
         assert!(call(vec![0; MAX_CALL_ARGS], 21_000, vm_call_fee(500, 21_000)).is_ok());
         assert!(call(vec![0; MAX_CALL_ARGS + 1], 21_000, vm_call_fee(500, 21_000)).is_err());
-        let underpriced = call(vec![1], 21_000, 500).unwrap_err();
+        let underpriced = call(vec![1], 21_000, 499).unwrap_err();
         assert!(underpriced.contains("below"), "{underpriced}");
+        let overpriced = call(vec![1], 21_000, 501).unwrap_err();
+        assert!(overpriced.contains("above"), "{overpriced}");
+        assert!(
+            call(vec![1], 6_000_000, 500 * 4_959).is_err(),
+            "the old metered token fee is refused"
+        );
         assert!(call(vec![1], 21_000, vm_call_fee(500, 21_000) - 1).is_err());
         assert!(call(vec![1], 21_000, vm_call_fee(500, 21_000)).is_ok());
-        assert!(sign_asset_call(
-            &seed,
-            0,
-            &target,
-            vec![1],
-            &target,
-            5,
-            0,
-            21_000,
-            500,
-            LOCAL_CHAIN_ID,
-            300,
-            500,
-            0,
-            &[0u8; 32],
-        )
-        .is_err());
-        assert!(sign_payable_call(
-            &seed,
-            0,
-            &target,
-            vec![1],
-            5,
-            0,
-            5_000_000,
-            500,
-            LOCAL_CHAIN_ID,
-            300,
-            500,
-            0,
-            &[0u8; 32],
-        )
-        .is_err());
+        let asset = |fee: u128| {
+            sign_asset_call(
+                &seed,
+                0,
+                &target,
+                vec![1],
+                &target,
+                5,
+                0,
+                21_000,
+                fee,
+                LOCAL_CHAIN_ID,
+                300,
+                500,
+                0,
+                &[0u8; 32],
+            )
+        };
+        assert!(asset(499).is_err());
+        assert!(asset(500).is_ok());
+        assert!(asset(501).is_err());
+        let payable = |fee: u128| {
+            sign_payable_call(
+                &seed,
+                0,
+                &target,
+                vec![1],
+                5,
+                0,
+                5_000_000,
+                fee,
+                LOCAL_CHAIN_ID,
+                300,
+                500,
+                0,
+                &[0u8; 32],
+            )
+        };
+        assert!(payable(499).is_err());
+        assert!(payable(500).is_ok());
+        assert!(
+            payable(500 * 4_133).is_err(),
+            "the old metered fee is refused"
+        );
     }
 
     #[test]
@@ -3428,7 +3548,7 @@ mod tests {
             750,
             LOCAL_CHAIN_ID,
             300,
-            500,
+            750,
             0,
             &[0u8; 32],
         )
@@ -3763,6 +3883,9 @@ mod tests {
             transfer_fee: 0,
             version: String::new(),
             protocol: GATEWAY_PROTOCOL,
+            deploy_fee: None,
+            rate_micro_usd_per_qtov: None,
+            quon_per_qtov: None,
         };
         let client = Client::new("http://127.0.0.1:8645");
         assert!(
@@ -3790,6 +3913,9 @@ mod tests {
             transfer_fee: 0,
             version: String::new(),
             protocol: GATEWAY_PROTOCOL,
+            deploy_fee: None,
+            rate_micro_usd_per_qtov: None,
+            quon_per_qtov: None,
         };
         let mut network = Network::testnet();
         network.chain_id = Some(MAINNET_CHAIN_NAME.to_string());
@@ -3832,7 +3958,7 @@ mod wire_tests {
         }
         let info = |fee: &str| {
             format!(
-                "{{\"chain_id\":\"c\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"head_height\":1,\"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"{fee}\"}},\"version\":\"v\",\"protocol\":1}}"
+                "{{\"chain_id\":\"c\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"head_height\":1,\"denomination\":\"Quon\",\"fee\":{{\"transfer_quon\":\"{fee}\"}},\"version\":\"v\",\"protocol\":2}}"
             )
         };
         assert!(parse_node_info(&info("500")).is_ok());

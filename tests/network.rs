@@ -66,7 +66,7 @@ fn spawn_gateway(reported_chain: &'static str) -> (u16, Arc<AtomicUsize>) {
                 "/v1/node_info" => format!(
                     "{{\"chain_id\":\"{reported_chain}\",\"genesis_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\
                      \"head_height\":10,\"denomination\":\"Quon\",\
-                     \"fee\":{{\"transfer_quon\":\"100\"}},\"version\":\"test\",\"protocol\":1}}"
+                     \"fee\":{{\"transfer_quon\":\"100\"}},\"version\":\"test\",\"protocol\":2}}"
                 ),
                 "/v1/get_account" => {
                     let addr = request
