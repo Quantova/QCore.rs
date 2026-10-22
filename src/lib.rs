@@ -1502,15 +1502,41 @@ fn sha256(data: &[u8]) -> [u8; 32] {
     out
 }
 
+const WORD_WIDTH: usize = 16;
+
+fn word_index(words: &[&str], word: &str) -> Option<usize> {
+    let mut entered = Zeroizing::new([0u8; WORD_WIDTH]);
+    for (slot, byte) in entered.iter_mut().zip(word.bytes()) {
+        *slot = byte;
+    }
+    let fits = word.len() <= WORD_WIDTH;
+    let mut found = 0usize;
+    let mut hit = 0u8;
+    for (index, candidate) in words.iter().enumerate() {
+        let mut padded = [0u8; WORD_WIDTH];
+        for (slot, byte) in padded.iter_mut().zip(candidate.bytes()) {
+            *slot = byte;
+        }
+        let mut diff = u8::from(candidate.len() != word.len());
+        for (a, b) in padded.iter().zip(entered.iter()) {
+            diff |= a ^ b;
+        }
+        let equal = (u16::from(diff).wrapping_sub(1) >> 8) as u8 & 1;
+        found |= index & 0usize.wrapping_sub(usize::from(equal));
+        hit |= equal;
+    }
+    std::hint::black_box(&found);
+    (hit == 1 && fits).then_some(found)
+}
+
 pub fn seed_from_mnemonic(phrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>, String> {
     let words = word_list();
     let folded = normalized_phrase(phrase);
     let entered: Vec<&str> = folded.split_whitespace().collect();
     let mut bits: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::with_capacity(entered.len() * 11));
     for word in &entered {
-        let index = words
-            .binary_search(word)
-            .map_err(|_| "a word in the phrase is not in the word list")?;
+        let index =
+            word_index(&words, word).ok_or("a word in the phrase is not in the word list")?;
         for shift in (0..11).rev() {
             bits.push(((index >> shift) & 1) as u8);
         }
