@@ -1040,6 +1040,17 @@ impl SigningSession {
                 ));
             }
         }
+        if expected.is_none() {
+            if let Some(local) = self.next.get(key).copied() {
+                if reported < local {
+                    return Err(format!(
+                        "the gateway reports nonce {reported} below the {local} this session already reached; \
+                         a nonce that goes back would let one nonce carry two signatures, so pass the \
+                         expected nonce to sign at it"
+                    ));
+                }
+            }
+        }
         let held = self.held.entry(key.to_string()).or_default();
         held.retain(|slot, accepted| !(*accepted && *slot < reported));
         if expected.is_some() {
@@ -1091,18 +1102,6 @@ impl SigningSession {
         let local = self.next.entry(key.to_string()).or_insert(reported);
         *local = (*local).max(reported);
         Ok(reported)
-    }
-
-    #[cfg(feature = "client")]
-    fn slot_fresh(
-        &mut self,
-        key: &str,
-        reported: u64,
-        expected: Option<u64>,
-        order: bool,
-    ) -> Result<u64, String> {
-        self.release_pending(key);
-        self.slot(key, reported, expected, order)
     }
 
     pub fn head_floor(&self, chain: &str) -> Option<(u64, u64)> {
@@ -1606,9 +1605,35 @@ mod client {
 
     use super::*;
 
-    fn order_slot_key(contract: &str, signer: &[u8; 32]) -> String {
+    fn order_slot_key(chain: &str, contract: &str, signer: &[u8; 32]) -> Result<String, String> {
         let hex: String = signer.iter().map(|b| format!("{b:02x}")).collect();
-        format!("{contract}/{hex}")
+        let contract = qtv_idfmt::render_address(&address_payload(contract)?)
+            .map_err(|_| "the contract is not a Q1 address".to_string())?;
+        Ok(format!("{chain}/{contract}/{hex}"))
+    }
+
+    fn account_slot_key(chain: &str, account: &str) -> String {
+        format!("{chain}/{account}")
+    }
+
+    pub(crate) fn shared_session() -> std::sync::MutexGuard<'static, SigningSession> {
+        static SHARED: std::sync::OnceLock<std::sync::Mutex<SigningSession>> =
+            std::sync::OnceLock::new();
+        SHARED
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    struct Reserved(Vec<(String, u64)>);
+
+    impl Drop for Reserved {
+        fn drop(&mut self) {
+            let mut session = shared_session();
+            for (key, slot) in &self.0 {
+                session.release(key, *slot);
+            }
+        }
     }
 
     pub trait Transport {
@@ -1731,15 +1756,15 @@ mod client {
         }
 
         pub fn session(&self) -> SigningSession {
-            self.session.borrow().clone()
+            shared_session().clone()
         }
 
         pub fn save_session(&self) -> String {
-            self.session.borrow().export_state()
+            shared_session().export_state()
         }
 
         pub fn restore_session(&self, state: &str) -> Result<(), String> {
-            self.session.borrow_mut().import_state(state)
+            shared_session().import_state(state)
         }
 
         fn signing_genesis(&self, info: &NodeInfo) -> Result<[u8; 32], String> {
@@ -1989,7 +2014,7 @@ mod client {
             }
             let chain_id = self.signing_chain_id(&info)?;
             let valid_until = self.validity(&info)?;
-            let nonce = self.checked_nonce(&sender, expected_nonce)?;
+            let (key, nonce, _reserved) = self.checked_nonce(&info, &sender, expected_nonce)?;
             let signed = sign_transfer(
                 seed,
                 index,
@@ -2003,15 +2028,35 @@ mod client {
                 &self.signing_genesis(&info)?,
             )?;
             self.remember_targets(&[to]);
-            let outcome = self.submit_held(&[(&sender, nonce)], &signed)?;
+            let outcome = self.submit_held(&[(&key, nonce)], &signed)?;
             Ok((signed, outcome))
         }
 
-        fn checked_nonce(&self, sender: &str, expected: Option<u64>) -> Result<u64, String> {
+        fn checked_nonce(
+            &self,
+            info: &NodeInfo,
+            sender: &str,
+            expected: Option<u64>,
+        ) -> Result<(String, u64, Reserved), String> {
             let account = self.account(sender)?;
-            self.session
-                .borrow_mut()
-                .slot_fresh(sender, account.nonce, expected, false)
+            let key = account_slot_key(&info.chain_id, sender);
+            let nonce = shared_session().slot(&key, account.nonce, expected, false)?;
+            let reserved = Reserved(vec![(key.clone(), nonce)]);
+            Ok((key, nonce, reserved))
+        }
+
+        fn order_nonce(
+            &self,
+            info: &NodeInfo,
+            contract: &str,
+            signer: &[u8; 32],
+            expected: Option<u64>,
+        ) -> Result<(String, u64, Reserved), String> {
+            let key = order_slot_key(&info.chain_id, contract, signer)?;
+            let reported = self.contract_nonce(contract, signer)?;
+            let nonce = shared_session().slot(&key, reported, expected, true)?;
+            let reserved = Reserved(vec![(key.clone(), nonce)]);
+            Ok((key, nonce, reserved))
         }
 
         fn submit_held(
@@ -2020,13 +2065,13 @@ mod client {
             signed: &SignedTransfer,
         ) -> Result<Submit, String> {
             {
-                let mut session = self.session.borrow_mut();
+                let mut session = shared_session();
                 for (key, slot) in slots {
                     session.signed(key, *slot);
                 }
             }
             let outcome = self.submit(&signed.tx_bytes)?;
-            let mut session = self.session.borrow_mut();
+            let mut session = shared_session();
             for (key, slot) in slots {
                 session.outcome(key, *slot, accepted(&outcome));
             }
@@ -2334,7 +2379,7 @@ mod client {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            let floor = self.session.borrow().head_floor(&info.chain_id);
+            let floor = shared_session().head_floor(&info.chain_id);
             let valid_until = bounded_valid_until_for(
                 clock.as_ref(),
                 verified,
@@ -2343,9 +2388,7 @@ mod client {
                 floor.map(|(height, _)| height),
                 floor.map(|(_, at)| wall.saturating_sub(at)).unwrap_or(0),
             )?;
-            self.session
-                .borrow_mut()
-                .note_head(&info.chain_id, info.head_height, wall);
+            shared_session().note_head(&info.chain_id, info.head_height, wall);
             Ok(valid_until)
         }
 
@@ -2423,7 +2466,7 @@ mod client {
             )?;
             let chain_id = self.signing_chain_id(&info)?;
             let valid_until = self.validity(&info)?;
-            let nonce = self.checked_nonce(&sender, expected_nonce)?;
+            let (key, nonce, _reserved) = self.checked_nonce(&info, &sender, expected_nonce)?;
             let signed = sign_payable_call(
                 seed,
                 index,
@@ -2440,7 +2483,7 @@ mod client {
                 &self.signing_genesis(&info)?,
             )?;
             self.remember_targets(&[target]);
-            let outcome = self.submit_held(&[(&sender, nonce)], &signed)?;
+            let outcome = self.submit_held(&[(&key, nonce)], &signed)?;
             Ok((signed, outcome))
         }
 
@@ -2495,7 +2538,7 @@ mod client {
             let fee = self.fee_within(vm_call_fee(info.transfer_fee, meter_limit), max_fee)?;
             let chain_id = self.signing_chain_id(&info)?;
             let valid_until = self.validity(&info)?;
-            let nonce = self.checked_nonce(&sender, expected_nonce)?;
+            let (key, nonce, _reserved) = self.checked_nonce(&info, &sender, expected_nonce)?;
             let signed = sign_asset_call(
                 seed,
                 index,
@@ -2513,7 +2556,7 @@ mod client {
                 &self.signing_genesis(&info)?,
             )?;
             self.remember_targets(&[target, asset_issuer]);
-            let outcome = self.submit_held(&[(&sender, nonce)], &signed)?;
+            let outcome = self.submit_held(&[(&key, nonce)], &signed)?;
             Ok((signed, outcome))
         }
 
@@ -2620,14 +2663,8 @@ mod client {
             let chain_id = self.signing_chain_id(&info)?;
             let valid_until = self.validity(&info)?;
             let signer = contract::order_signer(owner_seed, owner_index);
-            let order_key = order_slot_key(contract, &signer);
-            let reported = self.contract_nonce(contract, &signer)?;
-            let nonce = self.session.borrow_mut().slot_fresh(
-                &order_key,
-                reported,
-                expected_order_nonce,
-                true,
-            )?;
+            let (order_key, nonce, _order_reserved) =
+                self.order_nonce(&info, contract, &signer, expected_order_nonce)?;
             let order = contract::build_signed_order_call(
                 chain_id,
                 contract,
@@ -2638,7 +2675,8 @@ mod client {
                 owner_index,
                 nonce,
             )?;
-            let account_nonce = self.checked_nonce(&caller, expected_nonce)?;
+            let (key, account_nonce, _reserved) =
+                self.checked_nonce(&info, &caller, expected_nonce)?;
             let signed = sign_call(
                 caller_seed,
                 caller_index,
@@ -2655,7 +2693,7 @@ mod client {
             )?;
             self.remember_targets(&[contract]);
             let outcome =
-                self.submit_held(&[(&order_key, nonce), (&caller, account_nonce)], &signed)?;
+                self.submit_held(&[(&order_key, nonce), (&key, account_nonce)], &signed)?;
             Ok((signed, outcome, order))
         }
 
@@ -2743,14 +2781,8 @@ mod client {
             let chain_id = self.signing_chain_id(&info)?;
             let valid_until = self.validity(&info)?;
             let signer = contract::order_signer(owner_seed, owner_index);
-            let order_key = order_slot_key(contract, &signer);
-            let reported = self.contract_nonce(contract, &signer)?;
-            let nonce = self.session.borrow_mut().slot_fresh(
-                &order_key,
-                reported,
-                expected_order_nonce,
-                true,
-            )?;
+            let (order_key, nonce, _order_reserved) =
+                self.order_nonce(&info, contract, &signer, expected_order_nonce)?;
             let order = contract::build_typed_order_call(
                 chain_id,
                 contract,
@@ -2766,7 +2798,8 @@ mod client {
                 nonce,
                 expiry,
             )?;
-            let account_nonce = self.checked_nonce(&caller, expected_nonce)?;
+            let (key, account_nonce, _reserved) =
+                self.checked_nonce(&info, &caller, expected_nonce)?;
             let args = order.call_args.clone();
             let signed = match in_asset {
                 Some(issuer) => sign_asset_call(
@@ -2803,7 +2836,7 @@ mod client {
             };
             self.remember_targets(&targets);
             let outcome =
-                self.submit_held(&[(&order_key, nonce), (&caller, account_nonce)], &signed)?;
+                self.submit_held(&[(&order_key, nonce), (&key, account_nonce)], &signed)?;
             Ok((signed, outcome, order))
         }
 
@@ -2848,7 +2881,8 @@ mod client {
             )?;
             let chain_id = self.signing_chain_id(&info)?;
             let valid_until = self.validity(&info)?;
-            let account_nonce = self.checked_nonce(&deployer, expected_nonce)?;
+            let (key, account_nonce, _reserved) =
+                self.checked_nonce(&info, &deployer, expected_nonce)?;
             let args = contract::build_deploy_call(container, params);
             let contract = contract_address(&deployer, account_nonce)
                 .ok_or("the deployer is not a Q1 address")?;
@@ -2866,7 +2900,7 @@ mod client {
                 info.head_height,
                 &self.signing_genesis(&info)?,
             )?;
-            let outcome = self.submit_held(&[(&deployer, account_nonce)], &signed)?;
+            let outcome = self.submit_held(&[(&key, account_nonce)], &signed)?;
             if accepted(&outcome) {
                 self.remember_targets(&[&contract]);
             }
@@ -2913,7 +2947,7 @@ mod client {
             }
             let chain_id = self.signing_chain_id(&info)?;
             let valid_until = self.validity(&info)?;
-            let nonce = self.checked_nonce(&sender, expected_nonce)?;
+            let (key, nonce, _reserved) = self.checked_nonce(&info, &sender, expected_nonce)?;
             let signed = sign_register(
                 seed,
                 index,
@@ -2924,7 +2958,7 @@ mod client {
                 info.head_height,
                 &self.signing_genesis(&info)?,
             )?;
-            let outcome = self.submit_held(&[(&sender, nonce)], &signed)?;
+            let outcome = self.submit_held(&[(&key, nonce)], &signed)?;
             Ok((signed, outcome))
         }
     }
@@ -3018,14 +3052,14 @@ mod client {
         #[test]
         fn an_unverified_head_with_no_chain_clock_is_refused() {
             let client = Client::new("http://127.0.0.1:1");
-            let refused = client.validity(&info("Q-dev-net-7", 1_000)).unwrap_err();
+            let refused = client.validity(&info("Q-dev-net-71", 1_000)).unwrap_err();
             assert!(refused.contains("neither verified"), "{refused}");
             let public = clocked()
                 .validity(&info("Q-test-net-01", 1_000))
                 .unwrap_err();
             assert!(public.contains("must be verified"), "{public}");
             let ceiling = clocked()
-                .validity(&info("Q-dev-net-7", 1_000 * 20 + HEAD_SLACK_BLOCKS + 1))
+                .validity(&info("Q-dev-net-71", 1_000 * 20 + HEAD_SLACK_BLOCKS + 1))
                 .unwrap_err();
             assert!(ceiling.contains("wall-clock"), "{ceiling}");
         }
@@ -3033,51 +3067,54 @@ mod client {
         #[test]
         fn the_head_floor_survives_a_saved_session() {
             let first = clocked();
-            assert!(first.validity(&info("Q-dev-net-7", 1_200)).is_ok());
+            assert!(first.validity(&info("Q-dev-net-72", 1_200)).is_ok());
+            let mut restored = SigningSession::new();
+            restored.import_state(&first.save_session()).unwrap();
+            assert_eq!(
+                restored
+                    .head_floor("Q-dev-net-72")
+                    .map(|(height, _)| height),
+                Some(1_200)
+            );
             let second = clocked();
-            second.restore_session(&first.save_session()).unwrap();
-            assert!(second.validity(&info("Q-dev-net-7", 1_100)).is_err());
-            assert!(second.validity(&info("Q-dev-net-7", 1_200)).is_ok());
+            assert!(second.validity(&info("Q-dev-net-72", 1_100)).is_err());
+            assert!(second.validity(&info("Q-dev-net-72", 1_200)).is_ok());
         }
 
         #[test]
         fn a_head_past_the_plausible_range_or_leaping_is_refused() {
             let client = clocked();
-            assert!(client.validity(&info("Q-dev-net-7", u64::MAX)).is_err());
+            assert!(client.validity(&info("Q-dev-net-73", u64::MAX)).is_err());
             assert_eq!(
-                client.validity(&info("Q-dev-net-7", 1_000)).unwrap(),
+                client.validity(&info("Q-dev-net-73", 1_000)).unwrap(),
                 1_000 + DEFAULT_VALIDITY_BLOCKS
             );
-            assert!(client.validity(&info("Q-dev-net-7", 999)).is_err());
+            assert!(client.validity(&info("Q-dev-net-73", 999)).is_err());
             assert!(client
-                .validity(&info("Q-dev-net-7", 1_000 + 10_000))
+                .validity(&info("Q-dev-net-73", 1_000 + 10_000))
                 .is_err());
-            assert!(client.validity(&info("Q-dev-net-7", 1_010)).is_ok());
+            assert!(client.validity(&info("Q-dev-net-73", 1_010)).is_ok());
         }
 
         #[test]
         fn the_head_floor_rises_to_the_highest_head_seen() {
             let client = clocked();
-            assert!(client.validity(&info("Q-dev-net-7", 1_000)).is_ok());
-            assert!(client.validity(&info("Q-dev-net-7", 1_200)).is_ok());
+            assert!(client.validity(&info("Q-dev-net-74", 1_000)).is_ok());
+            assert!(client.validity(&info("Q-dev-net-74", 1_200)).is_ok());
             assert_eq!(
-                client
-                    .session
-                    .borrow()
-                    .head_floor("Q-dev-net-7")
+                shared_session()
+                    .head_floor("Q-dev-net-74")
                     .map(|(floor, _)| floor),
                 Some(1_200)
             );
             assert!(
-                client.validity(&info("Q-dev-net-7", 1_100)).is_err(),
+                client.validity(&info("Q-dev-net-74", 1_100)).is_err(),
                 "a head below the highest one seen is refused, not only one below the first"
             );
-            assert!(client.validity(&info("Q-dev-net-7", 1_200)).is_ok());
+            assert!(client.validity(&info("Q-dev-net-74", 1_200)).is_ok());
             assert_eq!(
-                client
-                    .session
-                    .borrow()
-                    .head_floor("Q-dev-net-7")
+                shared_session()
+                    .head_floor("Q-dev-net-74")
                     .map(|(floor, _)| floor),
                 Some(1_200)
             );
@@ -3153,6 +3190,18 @@ mod client {
                 "an accepted slot the chain has not passed is still held"
             );
             assert_eq!(session.slot("a", 5, None, false).unwrap(), 5);
+        }
+
+        #[test]
+        fn a_gateway_nonce_that_goes_back_is_refused_unless_named() {
+            let mut session = SigningSession::new();
+            for n in [5u64, 6] {
+                assert_eq!(session.slot("k", n, None, false).unwrap(), n);
+                session.signed("k", n);
+                session.outcome("k", n, true);
+            }
+            assert!(session.slot("k", 5, None, false).is_err());
+            assert_eq!(session.slot("k", 5, Some(5), false).unwrap(), 5);
         }
 
         #[test]
@@ -3252,7 +3301,8 @@ mod client {
             let to = account_address(&seed, 1);
             let configured = Client::with_network(base.clone(), Network::testnet(), false);
             assert!(configured.transfer(&seed, 0, &to, 5, 500).is_err());
-            assert!(!configured.session.borrow().is_held(&sender, 0));
+            let key = format!("Q-dev-net-1/{sender}");
+            assert!(!shared_session().is_held(&key, 0));
             let wall = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -3264,10 +3314,10 @@ mod client {
                 .unwrap_err()
                 .contains("self transfer"));
             assert!(
-                !client.session.borrow().is_held(&sender, 0),
+                !shared_session().is_held(&key, 0),
                 "a chain, head or signing refusal must not hold the nonce it never signed"
             );
-            assert_eq!(client.session.borrow().next_nonce(&sender), Some(0));
+            assert_eq!(shared_session().next_nonce(&key), Some(0));
         }
     }
 }

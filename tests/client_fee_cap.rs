@@ -117,7 +117,7 @@ fn spawn_gateway(fee_quon: u128) -> (u16, Arc<AtomicUsize>) {
 fn transfer_refuses_a_fee_above_the_ceiling_and_never_submits() {
     let (port, submits) = spawn_gateway(5000);
     let client = clocked(port);
-    let seed = [11u8; 32];
+    let seed = [41u8; 32];
     let to = account_address(&seed, 1);
 
     let err = client
@@ -135,7 +135,7 @@ fn transfer_refuses_a_fee_above_the_ceiling_and_never_submits() {
 fn transfer_at_or_below_the_ceiling_signs_and_submits() {
     let (port, submits) = spawn_gateway(1000);
     let client = clocked(port);
-    let seed = [11u8; 32];
+    let seed = [42u8; 32];
     let to = account_address(&seed, 1);
 
     let (_signed, outcome) = client
@@ -156,7 +156,7 @@ fn transfer_at_or_below_the_ceiling_signs_and_submits() {
 fn an_expected_nonce_the_gateway_has_not_reached_is_refused() {
     let (port, submits) = spawn_gateway(1000);
     let client = clocked(port);
-    let seed = [11u8; 32];
+    let seed = [43u8; 32];
     let to = account_address(&seed, 1);
 
     let err = client
@@ -175,7 +175,7 @@ fn an_expected_nonce_the_gateway_has_not_reached_is_refused() {
 fn every_client_signing_path_expires_a_window_past_the_head() {
     let (port, _) = spawn_gateway(500);
     let client = clocked(port);
-    let seed = [11u8; 32];
+    let seed = [44u8; 32];
     let to = account_address(&seed, 1);
     let chain_id = qcore::chain_id_from_name("Q-dev-net-1");
     let until = 10 + qcore::DEFAULT_VALIDITY_BLOCKS;
@@ -191,11 +191,11 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
 
     let client = clocked(port);
     let (signed, _) = client
-        .call(&seed, 0, &to, vec![1, 2], 21_000, call_fee)
+        .call(&seed, 2, &to, vec![1, 2], 21_000, call_fee)
         .unwrap();
     let expected = qcore::sign_call(
         &seed,
-        0,
+        2,
         &to,
         vec![1, 2],
         0,
@@ -214,8 +214,8 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
     );
 
     let client = clocked(port);
-    let (signed, _) = client.register(&seed, 0, 1000).unwrap();
-    let expected = qcore::sign_register(&seed, 0, 0, 500, chain_id, until, 0, &[0u8; 32]).unwrap();
+    let (signed, _) = client.register(&seed, 3, 1000).unwrap();
+    let expected = qcore::sign_register(&seed, 3, 0, 500, chain_id, until, 0, &[0u8; 32]).unwrap();
     assert_eq!(
         unsigned_part(&signed.tx_bytes),
         unsigned_part(&expected.tx_bytes)
@@ -225,7 +225,7 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
         qcore::sign_register(&seed, 0, 0, 500, chain_id, 0, 0, &[0u8; 32]).is_err(),
         "a deadline that never expires is refused"
     );
-    let later = qcore::sign_register(&seed, 0, 0, 500, chain_id, until + 1, 0, &[0u8; 32]).unwrap();
+    let later = qcore::sign_register(&seed, 3, 0, 500, chain_id, until + 1, 0, &[0u8; 32]).unwrap();
     assert_ne!(
         unsigned_part(&signed.tx_bytes),
         unsigned_part(&later.tx_bytes),
@@ -289,7 +289,7 @@ fn a_rejected_submission_does_not_free_a_signed_nonce_without_explicit_replaceme
         }
     });
     let client = clocked(port);
-    let seed = [11u8; 32];
+    let seed = [45u8; 32];
     let to = account_address(&seed, 1);
     let (_signed, first) = client.transfer(&seed, 0, &to, 1000, 1000).unwrap();
     assert!(matches!(first, Submit::Rejected { .. }));
@@ -307,7 +307,7 @@ fn a_rejected_submission_does_not_free_a_signed_nonce_without_explicit_replaceme
     let err = client
         .transfer(&seed, 0, &to, 3000, 1000)
         .expect_err("an accepted send still holds its nonce");
-    assert!(err.contains("already signed"), "unexpected error: {err}");
+    assert!(err.contains("already reached"), "unexpected error: {err}");
     assert_eq!(submits.load(Ordering::SeqCst), 2);
 }
 
@@ -315,7 +315,7 @@ fn a_rejected_submission_does_not_free_a_signed_nonce_without_explicit_replaceme
 fn a_contract_call_pays_the_flat_fee_and_refuses_a_ceiling_below_it() {
     let (port, submits) = spawn_gateway(500);
     let client = clocked(port);
-    let seed = [11u8; 32];
+    let seed = [46u8; 32];
     let to = account_address(&seed, 1);
     let err = client
         .call_payable_expecting(&seed, 0, &to, vec![1], 0, 21_000, 499, None)
