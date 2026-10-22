@@ -180,6 +180,7 @@ fn run() -> Result<(), String> {
     println!("[wrong key] PROOF: the contract refused a non owner, count unchanged and no event");
 
     let replay_caller = client.account(&deployer)?;
+    let replay_head = client.node_info()?.head_height;
     let replay = qcore::sign_call(
         &DEPLOYER_SEED,
         0,
@@ -189,9 +190,9 @@ fn run() -> Result<(), String> {
         METER,
         fee,
         qcore::chain_id_from_name(&info.chain_id),
-        qcore::valid_until_from(&client.node_info()?),
+        replay_head + qcore::DEFAULT_VALIDITY_BLOCKS,
         info.transfer_fee,
-        0,
+        replay_head,
         &[0u8; 32],
     )?;
     let replay_out = client.submit(&replay.tx_bytes)?;

@@ -32,6 +32,8 @@ pub const GENESIS_FLOOR_SECS: u64 = 1_735_689_600;
 
 pub const TESTNET_GENESIS_SECS: u64 = 1_791_082_813;
 
+pub const TESTNET_BLOCKS_PER_SEC: u64 = 5;
+
 pub const TESTNET_RPC_URL: &str = "https://q-test-net-01.quantova.org";
 
 pub const RETIRED_RPC_HOSTS: &[&str] = &["rpc-testnet.quantova.org"];
@@ -76,6 +78,8 @@ pub struct Network {
     pub genesis_hash: Option<[u8; 32]>,
     pub roster_commitment: Option<[u8; 32]>,
     pub epoch_length: Option<u64>,
+    pub genesis_secs: Option<u64>,
+    pub blocks_per_sec: Option<u64>,
 }
 
 impl Network {
@@ -91,6 +95,8 @@ impl Network {
             genesis_hash: TESTNET_GENESIS_HASH,
             roster_commitment: TESTNET_ROSTER_COMMITMENT,
             epoch_length: TESTNET_EPOCH_LENGTH,
+            genesis_secs: Some(TESTNET_GENESIS_SECS),
+            blocks_per_sec: Some(TESTNET_BLOCKS_PER_SEC),
         }
     }
 
@@ -106,6 +112,8 @@ impl Network {
             genesis_hash: MAINNET_GENESIS_HASH,
             roster_commitment: MAINNET_ROSTER_COMMITMENT,
             epoch_length: MAINNET_EPOCH_LENGTH,
+            genesis_secs: None,
+            blocks_per_sec: None,
         }
     }
 
@@ -121,8 +129,65 @@ impl Network {
             genesis_hash: None,
             roster_commitment: None,
             epoch_length: None,
+            genesis_secs: None,
+            blocks_per_sec: None,
         }
     }
+
+    pub fn with_clock(mut self, genesis_secs: u64, blocks_per_sec: u64) -> Network {
+        self.genesis_secs = Some(genesis_secs);
+        self.blocks_per_sec = Some(blocks_per_sec);
+        self
+    }
+
+    pub fn clock(&self) -> Result<Option<ChainClock>, String> {
+        match (self.genesis_secs, self.blocks_per_sec) {
+            (Some(genesis_secs), Some(blocks_per_sec)) => {
+                ChainClock::new(genesis_secs, blocks_per_sec).map(Some)
+            }
+            (None, None) => Ok(None),
+            _ => Err(format!(
+                "the {} network names a genesis time or a block rate but not both, set both or neither",
+                self.name
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChainClock {
+    pub genesis_secs: u64,
+    pub blocks_per_sec: u64,
+}
+
+impl ChainClock {
+    pub fn new(genesis_secs: u64, blocks_per_sec: u64) -> Result<ChainClock, String> {
+        if blocks_per_sec == 0 || blocks_per_sec > MAX_BLOCKS_PER_SEC {
+            return Err(format!(
+                "a block rate is from 1 to {MAX_BLOCKS_PER_SEC} blocks per second, not {blocks_per_sec}"
+            ));
+        }
+        Ok(ChainClock {
+            genesis_secs,
+            blocks_per_sec,
+        })
+    }
+
+    pub fn head_ceiling(&self, wall_secs: u64) -> u64 {
+        wall_secs
+            .saturating_sub(self.genesis_secs)
+            .saturating_mul(self.blocks_per_sec)
+            .saturating_add(HEAD_SLACK_BLOCKS)
+    }
+}
+
+pub const MAX_BLOCKS_PER_SEC: u64 = 1_000;
+
+pub fn known_clock(chain_name: &str) -> Option<ChainClock> {
+    (chain_name == TESTNET_CHAIN_NAME).then_some(ChainClock {
+        genesis_secs: TESTNET_GENESIS_SECS,
+        blocks_per_sec: TESTNET_BLOCKS_PER_SEC,
+    })
 }
 
 pub fn testnet_chain_id() -> u64 {
@@ -333,14 +398,33 @@ pub fn genesis_secs(chain_name: &str) -> u64 {
 }
 
 pub fn head_ceiling(chain_name: &str, wall_secs: u64) -> u64 {
-    wall_secs
-        .saturating_sub(genesis_secs(chain_name))
-        .saturating_mul(HEAD_BLOCKS_PER_SEC)
-        .saturating_add(HEAD_SLACK_BLOCKS)
+    known_clock(chain_name)
+        .unwrap_or(ChainClock {
+            genesis_secs: GENESIS_FLOOR_SECS,
+            blocks_per_sec: HEAD_BLOCKS_PER_SEC,
+        })
+        .head_ceiling(wall_secs)
 }
 
 pub fn bounded_valid_until(
     chain_name: &str,
+    head: u64,
+    wall_secs: u64,
+    floor: Option<u64>,
+    floor_age_secs: u64,
+) -> Result<u64, String> {
+    let clock = known_clock(chain_name).ok_or_else(|| {
+        format!(
+            "no genesis time and block rate are known for the chain {}, so a head the gateway reports cannot be bounded, verify the head against a trusted roster or supply the chain clock",
+            shown(chain_name)
+        )
+    })?;
+    bounded_valid_until_for(Some(&clock), false, head, wall_secs, floor, floor_age_secs)
+}
+
+pub fn bounded_valid_until_for(
+    clock: Option<&ChainClock>,
+    verified: bool,
     head: u64,
     wall_secs: u64,
     floor: Option<u64>,
@@ -351,10 +435,22 @@ pub fn bounded_valid_until(
             "the gateway reports head {head}, past any height this chain can have reached, refusing to sign"
         ));
     }
-    if head > head_ceiling(chain_name, wall_secs) {
-        return Err(format!(
-            "the gateway reports head {head} further ahead than wall-clock time allows, refusing to sign"
-        ));
+    let clock = match (verified, clock) {
+        (true, _) => None,
+        (false, Some(clock)) => Some(clock),
+        (false, None) => {
+            return Err(
+                "the head is neither verified against a trusted validator roster nor bounded by a known genesis time and block rate, refusing to sign a deadline the gateway alone chose"
+                    .to_string(),
+            )
+        }
+    };
+    if let Some(clock) = clock {
+        if head > clock.head_ceiling(wall_secs) {
+            return Err(format!(
+                "the gateway reports head {head} further ahead than wall-clock time allows, refusing to sign"
+            ));
+        }
     }
     if let Some(floor) = floor {
         if head < floor {
@@ -362,13 +458,15 @@ pub fn bounded_valid_until(
                 "the gateway reports head {head} below the {floor} it reported earlier, refusing to sign"
             ));
         }
-        let allowed = floor_age_secs
-            .saturating_mul(HEAD_BLOCKS_PER_SEC)
-            .saturating_add(HEAD_SLACK_BLOCKS);
-        if head > floor.saturating_add(allowed) {
-            return Err(format!(
-                "the gateway head leapt from {floor} to {head} faster than blocks are made, refusing to sign"
-            ));
+        if let Some(clock) = clock {
+            let allowed = floor_age_secs
+                .saturating_mul(clock.blocks_per_sec)
+                .saturating_add(HEAD_SLACK_BLOCKS);
+            if head > floor.saturating_add(allowed) {
+                return Err(format!(
+                    "the gateway head leapt from {floor} to {head} faster than blocks are made, refusing to sign"
+                ));
+            }
         }
     }
     let valid_until = head.saturating_add(DEFAULT_VALIDITY_BLOCKS);
@@ -701,6 +799,9 @@ pub fn sign_register(
 
 pub const DEFAULT_VALIDITY_BLOCKS: u64 = 300;
 
+#[deprecated(
+    note = "the gateway head is unverified, sign through Client so the deadline is bounded by a verified head or a known chain clock"
+)]
 pub fn valid_until_from(info: &NodeInfo) -> u64 {
     info.head_height.saturating_add(DEFAULT_VALIDITY_BLOCKS)
 }
@@ -868,6 +969,7 @@ pub struct SigningSession {
     reserved: std::collections::HashMap<String, std::collections::BTreeSet<u64>>,
     book: Vec<String>,
     seen: std::collections::VecDeque<String>,
+    heads: std::collections::HashMap<String, (u64, u64)>,
 }
 
 impl SigningSession {
@@ -1003,6 +1105,20 @@ impl SigningSession {
         self.slot(key, reported, expected, order)
     }
 
+    pub fn head_floor(&self, chain: &str) -> Option<(u64, u64)> {
+        self.heads.get(chain).copied()
+    }
+
+    pub fn note_head(&mut self, chain: &str, height: u64, wall_secs: u64) {
+        let entry = self
+            .heads
+            .entry(chain.to_string())
+            .or_insert((height, wall_secs));
+        if height > entry.0 {
+            *entry = (height, wall_secs);
+        }
+    }
+
     pub fn export_state(&self) -> String {
         use crate::json::{object, Json};
         let mut keys: Vec<&String> = self.next.keys().chain(self.held.keys()).collect();
@@ -1032,9 +1148,22 @@ impl SigningSession {
                 object(fields)
             })
             .collect();
+        let mut chains: Vec<(&String, &(u64, u64))> = self.heads.iter().collect();
+        chains.sort();
+        let heads: Vec<Json> = chains
+            .into_iter()
+            .map(|(chain, (height, at))| {
+                object(vec![
+                    ("chain", Json::str(chain.clone())),
+                    ("height", Json::str(height.to_string())),
+                    ("at", Json::str(at.to_string())),
+                ])
+            })
+            .collect();
         object(vec![
             ("version", Json::Int(1)),
             ("keys", Json::Array(entries)),
+            ("heads", Json::Array(heads)),
         ])
         .render()
     }
@@ -1083,8 +1212,30 @@ impl SigningSession {
             let local = self.next.entry(key).or_insert(value);
             *local = (*local).max(value);
         }
+        let mut heads = Vec::new();
+        match parsed.get("heads") {
+            None => {}
+            Some(Json::Array(list)) => {
+                for entry in list {
+                    let chain = entry
+                        .get("chain")
+                        .and_then(Json::as_str)
+                        .ok_or("a saved head names no chain")?
+                        .to_string();
+                    heads.push((
+                        chain,
+                        number(entry.get("height"), "head height")?,
+                        number(entry.get("at"), "head time")?,
+                    ));
+                }
+            }
+            Some(_) => return Err("the saved session heads are not a list".to_string()),
+        }
         for (key, slots) in held {
             self.held.entry(key).or_default().extend(slots);
+        }
+        for (chain, height, at) in heads {
+            self.note_head(&chain, height, at);
         }
         Ok(())
     }
@@ -1478,7 +1629,6 @@ mod client {
         acknowledge_mainnet: bool,
         transport: Box<dyn Transport>,
         pinned_chain: std::cell::RefCell<Option<String>>,
-        head_floor: std::cell::Cell<Option<(u64, std::time::Instant)>>,
         session: std::cell::RefCell<SigningSession>,
         trusted_roster: std::cell::RefCell<Option<TrustedRosters>>,
     }
@@ -1499,7 +1649,6 @@ mod client {
             acknowledge_mainnet,
             transport: Box::new(LoopbackHttp),
             pinned_chain: std::cell::RefCell::new(None),
-            head_floor: std::cell::Cell::new(None),
             trusted_roster: std::cell::RefCell::new(None),
             session: std::cell::RefCell::new(SigningSession::new()),
         }
@@ -1563,6 +1712,12 @@ mod client {
 
         pub fn with_transport(mut self, transport: Box<dyn Transport>) -> Client {
             self.transport = transport;
+            self
+        }
+
+        pub fn with_chain_clock(mut self, genesis_secs: u64, blocks_per_sec: u64) -> Client {
+            self.network.genesis_secs = Some(genesis_secs);
+            self.network.blocks_per_sec = Some(blocks_per_sec);
             self
         }
 
@@ -2059,7 +2214,7 @@ mod client {
             Ok((epoch, header, certificate))
         }
 
-        fn verify_head(&self, info: &NodeInfo) -> Result<(), String> {
+        fn verify_head(&self, info: &NodeInfo) -> Result<bool, String> {
             let chain_id = crate::checked_chain_id(&info.chain_id)?;
             let (epoch, header, certificate) = if self.anchor_pinned_roster()? {
                 self.certified_at(info.head_height)?
@@ -2077,7 +2232,7 @@ mod client {
                             .to_string(),
                     );
                 }
-                return Ok(());
+                return Ok(false);
             };
             let Some((genesis_hash, members)) = self.roster_for_epoch(chain_id, epoch)? else {
                 return Err("no trusted validator roster is held".to_string());
@@ -2096,7 +2251,7 @@ mod client {
                     info.head_height, verified.height
                 ));
             }
-            Ok(())
+            Ok(true)
         }
 
         pub fn verified_account(
@@ -2164,26 +2319,33 @@ mod client {
         }
 
         fn validity(&self, info: &NodeInfo) -> Result<u64, String> {
-            self.verify_head(info)?;
-            let head = info.head_height;
+            let verified = self.verify_head(info)?;
+            if !verified && (self.network.is_mainnet || crate::is_public_chain(&info.chain_id)) {
+                return Err(format!(
+                    "the head of the public chain {} must be verified against a trusted validator roster before signing, pin the network roster commitment or call trust_roster",
+                    crate::shown(&info.chain_id)
+                ));
+            }
+            let clock = match self.network.clock()? {
+                Some(clock) => Some(clock),
+                None => crate::known_clock(&info.chain_id),
+            };
             let wall = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            let now = std::time::Instant::now();
-            let floor = self.head_floor.get();
-            let valid_until = bounded_valid_until(
-                &info.chain_id,
-                head,
+            let floor = self.session.borrow().head_floor(&info.chain_id);
+            let valid_until = bounded_valid_until_for(
+                clock.as_ref(),
+                verified,
+                info.head_height,
                 wall,
                 floor.map(|(height, _)| height),
-                floor
-                    .map(|(_, at)| now.duration_since(at).as_secs())
-                    .unwrap_or(0),
+                floor.map(|(_, at)| wall.saturating_sub(at)).unwrap_or(0),
             )?;
-            if floor.is_none_or(|(height, _)| head > height) {
-                self.head_floor.set(Some((head, now)));
-            }
+            self.session
+                .borrow_mut()
+                .note_head(&info.chain_id, info.head_height, wall);
             Ok(valid_until)
         }
 
@@ -2845,9 +3007,42 @@ mod client {
             assert!(client.signing_chain_id(&info("Q-dev-net-8", 1)).is_err());
         }
 
+        fn clocked() -> Client {
+            let wall = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            Client::new("http://127.0.0.1:1").with_chain_clock(wall - 1_000, 20)
+        }
+
+        #[test]
+        fn an_unverified_head_with_no_chain_clock_is_refused() {
+            let client = Client::new("http://127.0.0.1:1");
+            let refused = client.validity(&info("Q-dev-net-7", 1_000)).unwrap_err();
+            assert!(refused.contains("neither verified"), "{refused}");
+            let public = clocked()
+                .validity(&info("Q-test-net-01", 1_000))
+                .unwrap_err();
+            assert!(public.contains("must be verified"), "{public}");
+            let ceiling = clocked()
+                .validity(&info("Q-dev-net-7", 1_000 * 20 + HEAD_SLACK_BLOCKS + 1))
+                .unwrap_err();
+            assert!(ceiling.contains("wall-clock"), "{ceiling}");
+        }
+
+        #[test]
+        fn the_head_floor_survives_a_saved_session() {
+            let first = clocked();
+            assert!(first.validity(&info("Q-dev-net-7", 1_200)).is_ok());
+            let second = clocked();
+            second.restore_session(&first.save_session()).unwrap();
+            assert!(second.validity(&info("Q-dev-net-7", 1_100)).is_err());
+            assert!(second.validity(&info("Q-dev-net-7", 1_200)).is_ok());
+        }
+
         #[test]
         fn a_head_past_the_plausible_range_or_leaping_is_refused() {
-            let client = Client::new("http://127.0.0.1:1");
+            let client = clocked();
             assert!(client.validity(&info("Q-dev-net-7", u64::MAX)).is_err());
             assert_eq!(
                 client.validity(&info("Q-dev-net-7", 1_000)).unwrap(),
@@ -2862,16 +3057,30 @@ mod client {
 
         #[test]
         fn the_head_floor_rises_to_the_highest_head_seen() {
-            let client = Client::new("http://127.0.0.1:1");
+            let client = clocked();
             assert!(client.validity(&info("Q-dev-net-7", 1_000)).is_ok());
             assert!(client.validity(&info("Q-dev-net-7", 1_200)).is_ok());
-            assert_eq!(client.head_floor.get().map(|(floor, _)| floor), Some(1_200));
+            assert_eq!(
+                client
+                    .session
+                    .borrow()
+                    .head_floor("Q-dev-net-7")
+                    .map(|(floor, _)| floor),
+                Some(1_200)
+            );
             assert!(
                 client.validity(&info("Q-dev-net-7", 1_100)).is_err(),
                 "a head below the highest one seen is refused, not only one below the first"
             );
             assert!(client.validity(&info("Q-dev-net-7", 1_200)).is_ok());
-            assert_eq!(client.head_floor.get().map(|(floor, _)| floor), Some(1_200));
+            assert_eq!(
+                client
+                    .session
+                    .borrow()
+                    .head_floor("Q-dev-net-7")
+                    .map(|(floor, _)| floor),
+                Some(1_200)
+            );
         }
 
         #[test]
@@ -3044,7 +3253,11 @@ mod client {
             let configured = Client::with_network(base.clone(), Network::testnet(), false);
             assert!(configured.transfer(&seed, 0, &to, 5, 500).is_err());
             assert!(!configured.session.borrow().is_held(&sender, 0));
-            let client = Client::new(base);
+            let wall = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let client = Client::new(base).with_chain_clock(wall - 1_000, 20);
             assert!(client.transfer(&seed, 0, &to, 5, 500).is_err());
             assert!(client
                 .transfer(&seed, 0, &sender, 5, 500)
@@ -4016,7 +4229,7 @@ mod wire_tests {
     fn the_head_bound_follows_the_network_genesis() {
         let at = TESTNET_GENESIS_SECS + 1_000;
         let ceiling = head_ceiling(TESTNET_CHAIN_NAME, at);
-        assert_eq!(ceiling, 1_000 * HEAD_BLOCKS_PER_SEC + HEAD_SLACK_BLOCKS);
+        assert_eq!(ceiling, 1_000 * TESTNET_BLOCKS_PER_SEC + HEAD_SLACK_BLOCKS);
         assert!(bounded_valid_until(TESTNET_CHAIN_NAME, ceiling, at, None, 0).is_ok());
         assert!(bounded_valid_until(TESTNET_CHAIN_NAME, ceiling + 1, at, None, 0).is_err());
         assert_eq!(
@@ -4024,8 +4237,17 @@ mod wire_tests {
             HEAD_SLACK_BLOCKS,
             "a clock before genesis allows only the slack, never an unbounded head"
         );
-        assert!(bounded_valid_until("Q-dev-net-1", 1_000, at, Some(1_000), 0).is_ok());
-        assert!(bounded_valid_until("Q-dev-net-1", 999, at, Some(1_000), 0).is_err());
+        assert!(bounded_valid_until("Q-dev-net-1", 1_000, at, Some(1_000), 0).is_err());
+        let clock = ChainClock::new(TESTNET_GENESIS_SECS, 20).unwrap();
+        let bounded = |head: u64, floor: Option<u64>| {
+            bounded_valid_until_for(Some(&clock), false, head, at, floor, 0)
+        };
+        assert!(bounded(1_000, Some(1_000)).is_ok());
+        assert!(bounded(999, Some(1_000)).is_err());
+        assert!(bounded(1_000 + HEAD_SLACK_BLOCKS + 1, Some(1_000)).is_err());
+        assert!(bounded_valid_until_for(None, false, 1_000, at, None, 0).is_err());
+        assert!(bounded_valid_until_for(None, true, 1_000_000, at, Some(999), 0).is_ok());
+        assert!(bounded_valid_until_for(None, true, 998, at, Some(999), 0).is_err());
         assert!(bounded_valid_until(
             "Q-dev-net-1",
             1_000 + HEAD_SLACK_BLOCKS + 1,

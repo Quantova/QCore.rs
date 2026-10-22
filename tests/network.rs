@@ -110,6 +110,8 @@ fn mainnet_at(base: &str) -> Network {
         genesis_hash: Some([0u8; 32]),
         roster_commitment: None,
         epoch_length: None,
+        genesis_secs: None,
+        blocks_per_sec: None,
     }
 }
 

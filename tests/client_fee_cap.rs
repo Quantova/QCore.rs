@@ -11,6 +11,14 @@ use std::thread;
 
 use qcore::{account_address, Client, Submit};
 
+fn clocked(port: u16) -> Client {
+    let wall = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    Client::new(format!("http://127.0.0.1:{port}")).with_chain_clock(wall - 1_000, 20)
+}
+
 fn unsigned_part(tx: &[u8]) -> &[u8] {
     let mut tail = qtv_codec::Encoder::new();
     tail.put_u8(0);
@@ -108,7 +116,7 @@ fn spawn_gateway(fee_quon: u128) -> (u16, Arc<AtomicUsize>) {
 #[test]
 fn transfer_refuses_a_fee_above_the_ceiling_and_never_submits() {
     let (port, submits) = spawn_gateway(5000);
-    let client = Client::new(format!("http://127.0.0.1:{port}"));
+    let client = clocked(port);
     let seed = [11u8; 32];
     let to = account_address(&seed, 1);
 
@@ -126,7 +134,7 @@ fn transfer_refuses_a_fee_above_the_ceiling_and_never_submits() {
 #[test]
 fn transfer_at_or_below_the_ceiling_signs_and_submits() {
     let (port, submits) = spawn_gateway(1000);
-    let client = Client::new(format!("http://127.0.0.1:{port}"));
+    let client = clocked(port);
     let seed = [11u8; 32];
     let to = account_address(&seed, 1);
 
@@ -147,7 +155,7 @@ fn transfer_at_or_below_the_ceiling_signs_and_submits() {
 #[test]
 fn an_expected_nonce_the_gateway_has_not_reached_is_refused() {
     let (port, submits) = spawn_gateway(1000);
-    let client = Client::new(format!("http://127.0.0.1:{port}"));
+    let client = clocked(port);
     let seed = [11u8; 32];
     let to = account_address(&seed, 1);
 
@@ -166,7 +174,7 @@ fn an_expected_nonce_the_gateway_has_not_reached_is_refused() {
 #[test]
 fn every_client_signing_path_expires_a_window_past_the_head() {
     let (port, _) = spawn_gateway(500);
-    let client = Client::new(format!("http://127.0.0.1:{port}"));
+    let client = clocked(port);
     let seed = [11u8; 32];
     let to = account_address(&seed, 1);
     let chain_id = qcore::chain_id_from_name("Q-dev-net-1");
@@ -181,7 +189,7 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
         unsigned_part(&expected.tx_bytes)
     );
 
-    let client = Client::new(format!("http://127.0.0.1:{port}"));
+    let client = clocked(port);
     let (signed, _) = client
         .call(&seed, 0, &to, vec![1, 2], 21_000, call_fee)
         .unwrap();
@@ -205,7 +213,7 @@ fn every_client_signing_path_expires_a_window_past_the_head() {
         unsigned_part(&expected.tx_bytes)
     );
 
-    let client = Client::new(format!("http://127.0.0.1:{port}"));
+    let client = clocked(port);
     let (signed, _) = client.register(&seed, 0, 1000).unwrap();
     let expected = qcore::sign_register(&seed, 0, 0, 500, chain_id, until, 0, &[0u8; 32]).unwrap();
     assert_eq!(
@@ -280,7 +288,7 @@ fn a_rejected_submission_does_not_free_a_signed_nonce_without_explicit_replaceme
             let _ = stream.write_all(response.as_bytes());
         }
     });
-    let client = Client::new(format!("http://127.0.0.1:{port}"));
+    let client = clocked(port);
     let seed = [11u8; 32];
     let to = account_address(&seed, 1);
     let (_signed, first) = client.transfer(&seed, 0, &to, 1000, 1000).unwrap();
@@ -306,7 +314,7 @@ fn a_rejected_submission_does_not_free_a_signed_nonce_without_explicit_replaceme
 #[test]
 fn a_contract_call_pays_the_flat_fee_and_refuses_a_ceiling_below_it() {
     let (port, submits) = spawn_gateway(500);
-    let client = Client::new(format!("http://127.0.0.1:{port}"));
+    let client = clocked(port);
     let seed = [11u8; 32];
     let to = account_address(&seed, 1);
     let err = client
