@@ -591,6 +591,22 @@ pub fn whole_number(text: &str) -> Option<u128> {
     text.parse().ok()
 }
 
+pub fn response_cap(method: &str) -> usize {
+    match method {
+        "node_info" | "get_account" | "submit_transaction" | "get_asset_balance"
+        | "get_asset_supply" => 64 * 1024,
+        "get_transaction" => 256 * 1024,
+        "get_finality"
+        | "get_roster_proof"
+        | "get_account_proof"
+        | "get_transaction_proof"
+        | "get_event_proof"
+        | "get_events"
+        | "get_storage_at" => 4 * 1024 * 1024,
+        _ => 8 * 1024 * 1024,
+    }
+}
+
 pub fn check_gateway_json(response: &str) -> Result<(), String> {
     json::parse(response).map(|_| ())
 }
@@ -1901,6 +1917,13 @@ mod client {
             let (status, text) =
                 self.transport
                     .post(&self.base, &format!("/v1/{method}"), &body)?;
+            let cap = crate::response_cap(method);
+            if text.len() > cap {
+                return Err(format!(
+                    "the gateway answered {method} with {} bytes, above the {cap} bytes that answer can need, refusing to read it",
+                    text.len()
+                ));
+            }
             if status == 200 {
                 Ok(text)
             } else {

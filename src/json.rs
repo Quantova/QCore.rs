@@ -121,31 +121,31 @@ const MAX_DEPTH: usize = 128;
 
 pub fn parse(input: &str) -> Result<Json, String> {
     let mut parser = Parser {
-        chars: input.chars().collect(),
+        bytes: input.as_bytes(),
         pos: 0,
         depth: 0,
     };
     parser.skip_ws();
     let value = parser.value()?;
     parser.skip_ws();
-    if parser.pos != parser.chars.len() {
+    if parser.pos != parser.bytes.len() {
         return Err("trailing characters after the JSON value".to_string());
     }
     Ok(value)
 }
 
-struct Parser {
-    chars: Vec<char>,
+struct Parser<'a> {
+    bytes: &'a [u8],
     pos: usize,
     depth: usize,
 }
 
-impl Parser {
-    fn peek(&self) -> Option<char> {
-        self.chars.get(self.pos).copied()
+impl Parser<'_> {
+    fn peek(&self) -> Option<u8> {
+        self.bytes.get(self.pos).copied()
     }
 
-    fn next(&mut self) -> Option<char> {
+    fn next(&mut self) -> Option<u8> {
         let c = self.peek();
         if c.is_some() {
             self.pos += 1;
@@ -154,7 +154,7 @@ impl Parser {
     }
 
     fn skip_ws(&mut self) {
-        while matches!(self.peek(), Some(' ' | '\t' | '\n' | '\r')) {
+        while matches!(self.peek(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
             self.pos += 1;
         }
     }
@@ -162,17 +162,17 @@ impl Parser {
     fn value(&mut self) -> Result<Json, String> {
         self.skip_ws();
         match self.peek() {
-            Some('{') => self.nested(Parser::object),
-            Some('[') => self.nested(Parser::array),
-            Some('"') => Ok(Json::Str(self.string()?)),
-            Some('t') | Some('f') => self.boolean(),
-            Some('n') => self.null(),
-            Some(c) if c == '-' || c.is_ascii_digit() => self.number(),
+            Some(b'{') => self.nested(Parser::object),
+            Some(b'[') => self.nested(Parser::array),
+            Some(b'"') => Ok(Json::Str(self.string()?)),
+            Some(b't') | Some(b'f') => self.boolean(),
+            Some(b'n') => self.null(),
+            Some(c) if c == b'-' || c.is_ascii_digit() => self.number(),
             _ => Err("expected a JSON value".to_string()),
         }
     }
 
-    fn nested(&mut self, parse: fn(&mut Parser) -> Result<Json, String>) -> Result<Json, String> {
+    fn nested(&mut self, parse: fn(&mut Self) -> Result<Json, String>) -> Result<Json, String> {
         self.depth += 1;
         if self.depth > MAX_DEPTH {
             return Err("the JSON is nested too deep".to_string());
@@ -187,13 +187,13 @@ impl Parser {
         let mut fields = Vec::new();
         let mut seen = std::collections::HashSet::new();
         self.skip_ws();
-        if self.peek() == Some('}') {
+        if self.peek() == Some(b'}') {
             self.next();
             return Ok(Json::Object(fields));
         }
         loop {
             self.skip_ws();
-            if self.peek() != Some('"') {
+            if self.peek() != Some(b'"') {
                 return Err("expected a string key".to_string());
             }
             let key = self.string()?;
@@ -201,15 +201,15 @@ impl Parser {
                 return Err("an object names the same key twice".to_string());
             }
             self.skip_ws();
-            if self.next() != Some(':') {
+            if self.next() != Some(b':') {
                 return Err("expected a colon after a key".to_string());
             }
             let value = self.value()?;
             fields.push((key, value));
             self.skip_ws();
             match self.next() {
-                Some(',') => continue,
-                Some('}') => break,
+                Some(b',') => continue,
+                Some(b'}') => break,
                 _ => return Err("expected a comma or a closing brace".to_string()),
             }
         }
@@ -220,7 +220,7 @@ impl Parser {
         self.next();
         let mut items = Vec::new();
         self.skip_ws();
-        if self.peek() == Some(']') {
+        if self.peek() == Some(b']') {
             self.next();
             return Ok(Json::Array(items));
         }
@@ -229,8 +229,8 @@ impl Parser {
             items.push(value);
             self.skip_ws();
             match self.next() {
-                Some(',') => continue,
-                Some(']') => break,
+                Some(b',') => continue,
+                Some(b']') => break,
                 _ => return Err("expected a comma or a closing bracket".to_string()),
             }
         }
@@ -241,24 +241,31 @@ impl Parser {
         self.next();
         let mut s = String::new();
         loop {
+            let run = self.pos;
+            while matches!(self.peek(), Some(c) if c != b'"' && c != b'\\' && c >= 0x20) {
+                self.pos += 1;
+            }
+            if self.pos > run {
+                s.push_str(
+                    std::str::from_utf8(&self.bytes[run..self.pos])
+                        .map_err(|_| "a string is not UTF-8".to_string())?,
+                );
+            }
             match self.next() {
-                Some('"') => return Ok(s),
-                Some('\\') => match self.next() {
-                    Some('"') => s.push('"'),
-                    Some('\\') => s.push('\\'),
-                    Some('/') => s.push('/'),
-                    Some('n') => s.push('\n'),
-                    Some('r') => s.push('\r'),
-                    Some('t') => s.push('\t'),
-                    Some('b') => s.push('\u{0008}'),
-                    Some('f') => s.push('\u{000c}'),
-                    Some('u') => s.push(self.unicode_char()?),
+                Some(b'"') => return Ok(s),
+                Some(b'\\') => match self.next() {
+                    Some(b'"') => s.push('"'),
+                    Some(b'\\') => s.push('\\'),
+                    Some(b'/') => s.push('/'),
+                    Some(b'n') => s.push('\n'),
+                    Some(b'r') => s.push('\r'),
+                    Some(b't') => s.push('\t'),
+                    Some(b'b') => s.push('\u{0008}'),
+                    Some(b'f') => s.push('\u{000c}'),
+                    Some(b'u') => s.push(self.unicode_char()?),
                     _ => return Err("bad escape in a string".to_string()),
                 },
-                Some(c) if (c as u32) < 0x20 => {
-                    return Err("a string carries a raw control character".to_string())
-                }
-                Some(c) => s.push(c),
+                Some(_) => return Err("a string carries a raw control character".to_string()),
                 None => return Err("a string was not closed".to_string()),
             }
         }
@@ -269,7 +276,7 @@ impl Parser {
         for _ in 0..4 {
             let digit = self
                 .next()
-                .and_then(|c| c.to_digit(16))
+                .and_then(|c| char::from(c).to_digit(16))
                 .ok_or("bad unicode escape")?;
             code = code * 16 + digit;
         }
@@ -279,7 +286,7 @@ impl Parser {
     fn unicode_char(&mut self) -> Result<char, String> {
         let hi = self.hex4()?;
         if (0xD800..=0xDBFF).contains(&hi) {
-            if self.next() != Some('\\') || self.next() != Some('u') {
+            if self.next() != Some(b'\\') || self.next() != Some(b'u') {
                 return Err("a high surrogate with no low surrogate".to_string());
             }
             let lo = self.hex4()?;
@@ -297,14 +304,15 @@ impl Parser {
 
     fn number(&mut self) -> Result<Json, String> {
         let start = self.pos;
-        if self.peek() == Some('-') {
+        if self.peek() == Some(b'-') {
             self.next();
         }
         while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
             self.next();
         }
-        let text: String = self.chars[start..self.pos].iter().collect();
-        if matches!(self.peek(), Some('.' | 'e' | 'E')) {
+        let text = std::str::from_utf8(&self.bytes[start..self.pos])
+            .map_err(|_| "a number is not text".to_string())?;
+        if matches!(self.peek(), Some(b'.' | b'e' | b'E')) {
             return Err(format!("'{text}' is followed by a fraction or exponent, the wire carries whole numbers only"));
         }
         if text.len() > 1 && text.starts_with('0') {
@@ -318,9 +326,9 @@ impl Parser {
     }
 
     fn boolean(&mut self) -> Result<Json, String> {
-        if self.literal("true") {
+        if self.literal(b"true") {
             Ok(Json::Bool(true))
-        } else if self.literal("false") {
+        } else if self.literal(b"false") {
             Ok(Json::Bool(false))
         } else {
             Err("expected true or false".to_string())
@@ -328,17 +336,16 @@ impl Parser {
     }
 
     fn null(&mut self) -> Result<Json, String> {
-        if self.literal("null") {
+        if self.literal(b"null") {
             Ok(Json::Null)
         } else {
             Err("expected null".to_string())
         }
     }
 
-    fn literal(&mut self, word: &str) -> bool {
-        let end = self.pos + word.len();
-        if end <= self.chars.len() && self.chars[self.pos..end].iter().collect::<String>() == word {
-            self.pos = end;
+    fn literal(&mut self, word: &[u8]) -> bool {
+        if self.bytes[self.pos..].starts_with(word) {
+            self.pos += word.len();
             true
         } else {
             false
