@@ -49,6 +49,10 @@ fn main() {
                 }
                 break;
             }
+            TxStatus::Unverified { height, .. } => {
+                println!("the gateway reports it finalised at height {height}, unverified without a trusted roster");
+                break;
+            }
             TxStatus::Pending => sleep(Duration::from_millis(250)),
             TxStatus::Unknown => {
                 println!("the transaction is unknown, it did not land");

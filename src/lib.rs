@@ -895,6 +895,7 @@ pub enum Submit {
 #[derive(Debug, Clone)]
 pub enum TxStatus {
     Finalised { height: u64, block: Option<String> },
+    Unverified { height: u64, block: Option<String> },
     Pending,
     Unknown,
 }
@@ -1891,20 +1892,32 @@ mod client {
 
         pub fn transaction(&self, tx_id: &str) -> Result<TxStatus, String> {
             let status = self.transaction_reported(tx_id)?;
-            if matches!(status, TxStatus::Finalised { .. }) && self.anchor_pinned_roster()? {
-                self.confirm_transaction_trusted(tx_id)?;
+            let TxStatus::Finalised { height, block } = status else {
+                return Ok(status);
+            };
+            if self.anchor_pinned_roster()? {
+                let confirmed = self.confirm_inclusion_trusted(tx_id)?;
+                return Ok(TxStatus::Finalised {
+                    height: confirmed.header.height,
+                    block: qtv_idfmt::render_block(&confirmed.header.hash).ok(),
+                });
             }
-            Ok(status)
+            let configured_mainnet = self.network.is_mainnet
+                || self
+                    .network
+                    .chain_id
+                    .as_deref()
+                    .is_some_and(crate::is_mainnet_chain);
+            if configured_mainnet || crate::is_mainnet_chain(&self.node_info()?.chain_id) {
+                return Err(
+                    "a mainnet transaction status needs a trusted validator roster, the gateway's word alone is not proof of finality, call trust_roster first"
+                        .to_string(),
+                );
+            }
+            Ok(TxStatus::Unverified { height, block })
         }
 
-        pub fn confirm_transaction(
-            &self,
-            tx_id: &str,
-            genesis_hash: &[u8; 32],
-            roster: &crate::finality::VerifiedRoster,
-        ) -> Result<crate::finality::ConfirmedTransaction, String> {
-            use crate::json::{from_hex, object, parse, Json};
-            let info = self.node_info()?;
+        fn checked_chain(&self, info: &NodeInfo) -> Result<u64, String> {
             if let Some(configured) = &self.network.chain_id {
                 if &info.chain_id != configured {
                     return Err(format!(
@@ -1913,7 +1926,17 @@ mod client {
                     ));
                 }
             }
-            let chain_id = crate::checked_chain_id(&info.chain_id)?;
+            crate::checked_chain_id(&info.chain_id)
+        }
+
+        fn inclusion(
+            &self,
+            tx_id: &str,
+            trusted: Option<(&[u8; 32], &crate::finality::VerifiedRoster)>,
+        ) -> Result<crate::finality::ConfirmedTransaction, String> {
+            use crate::json::{from_hex, object, parse, Json};
+            let info = self.node_info()?;
+            let chain_id = self.checked_chain(&info)?;
             let proof = parse(&self.rpc(
                 "get_transaction_proof",
                 object(vec![("tx_id", Json::str(tx_id))]).render(),
@@ -1937,27 +1960,24 @@ mod client {
                     .get("steps")
                     .ok_or("the transaction proof carries no steps")?,
             )?;
-            let finality = parse(&self.rpc(
-                "get_finality",
-                object(vec![("height", Json::Int(height))]).render(),
-            )?)?;
-            let header = from_hex(
-                finality
-                    .get("header_bytes")
-                    .and_then(Json::as_str)
-                    .ok_or("the finality answer carries no header")?,
-            )?;
-            let certificate = from_hex(
-                finality
-                    .get("certificate")
-                    .and_then(Json::as_str)
-                    .ok_or("the finality answer carries no certificate")?,
-            )?;
+            let (epoch, header, certificate) = self.certified_at(height)?;
+            let (genesis_hash, roster) = match trusted {
+                Some((genesis, roster)) => (*genesis, roster.clone()),
+                None => {
+                    let Some((genesis, members)) = self.roster_for_epoch(chain_id, epoch)? else {
+                        return Err(
+                            "a verified confirmation needs a trusted validator roster, call trust_roster first"
+                                .to_string(),
+                        );
+                    };
+                    (genesis, crate::finality::VerifiedRoster { epoch, members })
+                }
+            };
             let verified = crate::finality::verify_finality_in_epoch(
                 chain_id,
-                genesis_hash,
+                &genesis_hash,
                 self.epoch_length()?,
-                roster,
+                &roster,
                 &header,
                 &certificate,
             )?;
@@ -1972,11 +1992,119 @@ mod client {
             ) {
                 return Err("the transaction is not proven inside the finalized block".to_string());
             }
+            if !crate::finality::index_fits_path(index, &steps) {
+                return Err(format!(
+                    "the gateway names position {index} for the transaction, which its verified inclusion path cannot reach"
+                ));
+            }
+            let kind = crate::finality::transaction_kind(&leaf)?;
             Ok(crate::finality::ConfirmedTransaction {
                 tx_id: tx_id.to_string(),
                 index,
                 header: verified,
+                kind,
+                outcome: match kind {
+                    crate::finality::TxKind::Transfer => crate::finality::TxOutcome::Applied,
+                    crate::finality::TxKind::Call => {
+                        crate::finality::TxOutcome::IncludedOutcomeUnproven
+                    }
+                },
             })
+        }
+
+        pub fn confirm_inclusion(
+            &self,
+            tx_id: &str,
+            genesis_hash: &[u8; 32],
+            roster: &crate::finality::VerifiedRoster,
+        ) -> Result<crate::finality::ConfirmedTransaction, String> {
+            self.inclusion(tx_id, Some((genesis_hash, roster)))
+        }
+
+        pub fn confirm_inclusion_trusted(
+            &self,
+            tx_id: &str,
+        ) -> Result<crate::finality::ConfirmedTransaction, String> {
+            self.inclusion(tx_id, None)
+        }
+
+        fn settled(
+            confirmed: crate::finality::ConfirmedTransaction,
+        ) -> Result<crate::finality::ConfirmedTransaction, String> {
+            if confirmed.kind == crate::finality::TxKind::Call {
+                return Err(format!(
+                    "{} is a contract call, which the chain includes and charges even when it reverts, so inclusion does not prove it ran; prove the event it emits with confirm_call_event, or use confirm_inclusion for inclusion alone",
+                    confirmed.tx_id
+                ));
+            }
+            Ok(confirmed)
+        }
+
+        pub fn confirm_transaction(
+            &self,
+            tx_id: &str,
+            genesis_hash: &[u8; 32],
+            roster: &crate::finality::VerifiedRoster,
+        ) -> Result<crate::finality::ConfirmedTransaction, String> {
+            Self::settled(self.confirm_inclusion(tx_id, genesis_hash, roster)?)
+        }
+
+        pub fn confirm_call_event(
+            &self,
+            tx_id: &str,
+            contract: &str,
+            selector: [u8; 4],
+            data: Option<&[u8]>,
+        ) -> Result<crate::finality::ConfirmedTransaction, String> {
+            use crate::json::{from_hex, object, parse, Json};
+            let mut confirmed = self.confirm_inclusion_trusted(tx_id)?;
+            let height = confirmed.header.height;
+            let events = self.events(height)?;
+            for (position, event) in events.iter().enumerate() {
+                if !same_address(&event.contract, contract)
+                    || event.selector != selector
+                    || data.is_some_and(|data| data != event.data.as_slice())
+                {
+                    continue;
+                }
+                let answer = parse(
+                    &self.rpc(
+                        "get_event_proof",
+                        object(vec![
+                            ("height", Json::Int(height)),
+                            ("index", Json::Int(position as u64)),
+                        ])
+                        .render(),
+                    )?,
+                )?;
+                let leaf = from_hex(
+                    answer
+                        .get("leaf")
+                        .and_then(Json::as_str)
+                        .ok_or("the event proof carries no leaf")?,
+                )?;
+                let steps = crate::finality::parse_steps(
+                    answer
+                        .get("steps")
+                        .ok_or("the event proof carries no steps")?,
+                )?;
+                if !crate::finality::verify_event(&confirmed.header.event_root, &leaf, &steps) {
+                    continue;
+                }
+                let proven = crate::finality::decode_event(&leaf)?;
+                if same_address(&proven.contract, contract)
+                    && proven.selector == selector
+                    && data.is_none_or(|data| data == proven.data.as_slice())
+                {
+                    confirmed.outcome = crate::finality::TxOutcome::EventProven {
+                        event_index: position as u64,
+                    };
+                    return Ok(confirmed);
+                }
+            }
+            Err(format!(
+                "the block that holds {tx_id} carries no proven event of that contract and selector, so the call is not shown to have run"
+            ))
         }
 
         pub fn transfer(
@@ -2305,7 +2433,7 @@ mod client {
         ) -> Result<crate::finality::VerifiedAccount, String> {
             use crate::json::{from_hex, object, parse, Json};
             let info = self.node_info()?;
-            let chain_id = crate::checked_chain_id(&info.chain_id)?;
+            let chain_id = self.checked_chain(&info)?;
             let answer = parse(&self.rpc(
                 "get_account_proof",
                 object(vec![("address", Json::str(address))]).render(),
@@ -2343,24 +2471,7 @@ mod client {
             &self,
             tx_id: &str,
         ) -> Result<crate::finality::ConfirmedTransaction, String> {
-            let info = self.node_info()?;
-            let chain_id = crate::checked_chain_id(&info.chain_id)?;
-            let status = self.transaction_reported(tx_id)?;
-            let TxStatus::Finalised { height, .. } = status else {
-                return Err("the transaction is not reported as finalised".to_string());
-            };
-            let (epoch, _, _) = self.certified_at(height)?;
-            let Some((genesis_hash, members)) = self.roster_for_epoch(chain_id, epoch)? else {
-                return Err(
-                    "a verified confirmation needs a trusted validator roster, call trust_roster first"
-                        .to_string(),
-                );
-            };
-            self.confirm_transaction(
-                tx_id,
-                &genesis_hash,
-                &crate::finality::VerifiedRoster { epoch, members },
-            )
+            Self::settled(self.confirm_inclusion_trusted(tx_id)?)
         }
 
         fn validity(&self, info: &NodeInfo) -> Result<u64, String> {
@@ -3331,6 +3442,31 @@ mod tests {
         tail.put_u8(0);
         tail.put_bytes(&[0u8; qtv_crypto::ml_dsa::SIGNATURE_BYTES]);
         &tx[..tx.len() - tail.into_bytes().len()]
+    }
+
+    #[test]
+    fn a_named_transaction_position_must_fit_its_inclusion_path() {
+        for n in 1..70usize {
+            let leaves: Vec<Vec<u8>> = (0..n).map(|i| vec![i as u8]).collect();
+            for i in 0..n {
+                let steps: Vec<([u8; 32], bool)> = qtv_block::prove_inclusion(&leaves, i)
+                    .unwrap()
+                    .steps
+                    .iter()
+                    .map(|step| (step.sibling, step.sibling_on_left))
+                    .collect();
+                assert!(finality::index_fits_path(i as u64, &steps), "{n} {i}");
+            }
+        }
+        let two: Vec<Vec<u8>> = vec![vec![1], vec![2]];
+        let first: Vec<([u8; 32], bool)> = qtv_block::prove_inclusion(&two, 0)
+            .unwrap()
+            .steps
+            .iter()
+            .map(|step| (step.sibling, step.sibling_on_left))
+            .collect();
+        assert!(!finality::index_fits_path(7, &first));
+        assert!(!finality::index_fits_path(1, &first));
     }
 
     #[test]

@@ -403,11 +403,75 @@ pub fn verify_transaction(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxKind {
+    Transfer,
+    Call,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxOutcome {
+    Applied,
+    IncludedOutcomeUnproven,
+    EventProven { event_index: u64 },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfirmedTransaction {
     pub tx_id: String,
     pub index: u64,
     pub header: FinalizedHeader,
+    pub kind: TxKind,
+    pub outcome: TxOutcome,
+}
+
+pub fn transaction_kind(leaf: &[u8]) -> Result<TxKind, String> {
+    let malformed = || "the transaction leaf is malformed".to_string();
+    let mut decoder = Decoder::new(leaf);
+    decoder.get_bytes().map_err(|_| malformed())?;
+    decoder.get_u64().map_err(|_| malformed())?;
+    decoder.get_u64().map_err(|_| malformed())?;
+    decoder.get_u128().map_err(|_| malformed())?;
+    let target = decoder.get_bytes().map_err(|_| malformed())?.to_vec();
+    decoder.get_bytes().map_err(|_| malformed())?;
+    decoder.get_u64().map_err(|_| malformed())?;
+    decoder.get_u64().map_err(|_| malformed())?;
+    let in_asset = decoder.get_bytes().map_err(|_| malformed())?.len();
+    decoder.get_u64().map_err(|_| malformed())?;
+    let kind = decoder.get_u8().map_err(|_| malformed())?;
+    decoder.get_u8().map_err(|_| malformed())?;
+    decoder.get_bytes().map_err(|_| malformed())?;
+    decoder.finish().map_err(|_| malformed())?;
+    let deploy = crate::address_payload(&crate::vm_deploy_address())
+        .map(|payload| payload[..] == target[..])
+        .unwrap_or(false);
+    Ok(if kind == qtv_tx::KIND_CALL || deploy || in_asset != 0 {
+        TxKind::Call
+    } else {
+        TxKind::Transfer
+    })
+}
+
+pub fn index_fits_path(index: u64, steps: &[([u8; 32], bool)]) -> bool {
+    let depth_total = steps.len();
+    let top_down: Vec<bool> = steps.iter().rev().map(|(_, left)| *left).collect();
+    match top_down.iter().position(|right| !right) {
+        None => index.count_ones() as usize == depth_total,
+        Some(turn) => {
+            let depth = depth_total - turn - 1;
+            if depth >= 64 {
+                return false;
+            }
+            let low_mask = (1u64 << depth) - 1;
+            let low = top_down[turn + 1..]
+                .iter()
+                .fold(0u64, |acc, &right| (acc << 1) | u64::from(right));
+            let high = index.checked_shr(depth as u32 + 1).unwrap_or(0);
+            index & low_mask == low
+                && (index >> depth) & 1 == 0
+                && high.count_ones() as usize == turn
+        }
+    }
 }
 
 pub fn parse_roster(text: &str) -> Result<Vec<RosterMember>, String> {

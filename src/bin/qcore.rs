@@ -172,6 +172,11 @@ fn cmd_status(args: &[String]) -> Result<(), String> {
             height,
             block: None,
         } => println!("finalised at height {height}"),
+        TxStatus::Unverified { height, .. } => {
+            return Err(format!(
+                "UNVERIFIED, the gateway alone reports it finalised at height {height}; no trusted validator roster checked it"
+            ))
+        }
         TxStatus::Pending => println!("pending"),
         TxStatus::Unknown => println!("unknown"),
     }
