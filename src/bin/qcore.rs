@@ -473,13 +473,18 @@ mod seed_tests {
     #[test]
     fn a_group_readable_seed_file_is_refused() {
         use std::os::unix::fs::PermissionsExt;
-        let path = std::env::temp_dir().join(format!("qcore_seed_{}", std::process::id()));
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("qcore_seed_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = dir.join("seed");
         std::fs::write(&path, "ab".repeat(32)).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         let shared = read_seed(&format!("@{}", path.display()), false);
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         let private = read_seed(&format!("@{}", path.display()), false);
-        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
         assert!(shared.is_err());
         assert!(private.is_ok());
     }
