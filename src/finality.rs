@@ -14,7 +14,7 @@ use qtv_block::{header_from_bytes, verify_inclusion, MerkleProof, MerkleStep};
 use qtv_codec::Decoder;
 use qtv_crypto::ml_dsa::{self, PUBLIC_KEY_BYTES, SIGNATURE_BYTES};
 use qtv_sampler::onetime::{MerklePath, Root, NODE_BYTES, PREIMAGE_BYTES};
-use qtv_sampler::params::{finality_threshold, MAX_ACTIVE_VALIDATORS, MIN_SELF_STAKE};
+use qtv_sampler::params::{MAX_ACTIVE_VALIDATORS, MIN_SELF_STAKE};
 use qtv_sampler::sortition::{verify_membership, Credential};
 
 const PARENT_GENESIS: u8 = 0;
@@ -177,16 +177,11 @@ pub fn verify_finality(
             return Err("a committee reveal does not prove its committee membership".to_string());
         }
     }
-    if signed.saturating_mul(3) < total.saturating_mul(2) {
-        return Err("the attesting validators hold less than two thirds of the stake".to_string());
-    }
-    let seats = finality_threshold(roster.len() as u64);
-    if (seen.len() as u64) < seats {
-        return Err(format!(
-            "{} validators attest but finality needs {seats} of the {} seats in the committee",
-            seen.len(),
-            roster.len()
-        ));
+    if signed.saturating_mul(3) <= total.saturating_mul(2) {
+        return Err(
+            "the attesting validators hold two thirds of the stake or less, finality needs strictly more"
+                .to_string(),
+        );
     }
     Ok(FinalizedHeader {
         height: header.height(),
