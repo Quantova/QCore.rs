@@ -288,7 +288,7 @@ pub fn check_call_to(
     fee: u128,
     transfer_fee: u128,
 ) -> Result<(), String> {
-    let deploy = target == vm_deploy_address();
+    let deploy = same_address(target, &vm_deploy_address());
     let ceiling = if deploy {
         MAX_DEPLOY_METER_LIMIT
     } else {
@@ -326,6 +326,18 @@ fn check_call_under(
             "the fee {fee} carries no deploy fee, a deploy pays the locked network fee {required} plus the frozen deploy fee, refusing to sign a deploy the chain would reject"
         ));
     }
+    if deploy {
+        let deploy_fee = fee - required;
+        let floor = transfer_fee.saturating_mul(DEPLOY_TO_TRANSFER_FLOOR);
+        let ceiling = transfer_fee
+            .saturating_add(1)
+            .saturating_mul(DEPLOY_TO_TRANSFER_CEILING);
+        if deploy_fee < floor || deploy_fee > ceiling {
+            return Err(format!(
+                "the deploy fee {deploy_fee} is not the frozen five US dollars at any rate that prices the {transfer_fee} network fee inside its locked band, refusing to sign"
+            ));
+        }
+    }
     if !deploy && fee > required {
         return Err(format!(
             "the fee {fee} is above the flat network fee {required}, every transaction pays exactly the locked fee, refusing to sign"
@@ -335,6 +347,14 @@ fn check_call_under(
 }
 
 pub const DEPLOY_FEE_MICRO_USD: u128 = 5_000_000;
+
+pub const FEE_BAND_FLOOR_MICRO_USD: u128 = 500;
+
+pub const FEE_BAND_CEILING_MICRO_USD: u128 = 1_000;
+
+pub const DEPLOY_TO_TRANSFER_FLOOR: u128 = DEPLOY_FEE_MICRO_USD / FEE_BAND_CEILING_MICRO_USD;
+
+pub const DEPLOY_TO_TRANSFER_CEILING: u128 = DEPLOY_FEE_MICRO_USD / FEE_BAND_FLOOR_MICRO_USD;
 
 pub fn deploy_fee_of(info: &NodeInfo) -> Result<u128, String> {
     let (Some(fee), Some(rate), Some(unit)) = (
@@ -354,6 +374,14 @@ pub fn deploy_fee_of(info: &NodeInfo) -> Result<u128, String> {
     if rate == 0 || unit == 0 || fee != expected {
         return Err(format!(
             "the gateway asks a deploy fee of {fee} Quon, which is not the frozen five US dollars at its own rate, refusing to sign"
+        ));
+    }
+    let band_floor = FEE_BAND_FLOOR_MICRO_USD.saturating_mul(unit) / rate;
+    let band_ceiling = FEE_BAND_CEILING_MICRO_USD.saturating_mul(unit) / rate;
+    if info.transfer_fee < band_floor || info.transfer_fee > band_ceiling {
+        return Err(format!(
+            "the gateway rate of {rate} micro US dollars a QTOV prices its own {} Quon network fee outside the locked band, so the rate behind its deploy fee does not hold, refusing to sign",
+            info.transfer_fee
         ));
     }
     Ok(fee)
@@ -812,7 +840,13 @@ pub fn vm_call_fee(transfer_fee: u128, _meter_limit: u64) -> u128 {
 
 #[cfg(feature = "client")]
 fn is_mainnet_chain(name: &str) -> bool {
-    name.starts_with("Q-main-net-")
+    name.starts_with("Q-main-net-") || chain_id_from_name(name) == MAINNET_CHAIN_ID
+}
+
+#[cfg(feature = "client")]
+fn is_mainnet_info(info: &NodeInfo) -> bool {
+    is_mainnet_chain(&info.chain_id)
+        || MAINNET_GENESIS_HASH.is_some_and(|pinned| parse_genesis(info).ok() == Some(pinned))
 }
 
 #[cfg(feature = "client")]
@@ -837,6 +871,14 @@ pub fn block_by_height_body(height: u64) -> String {
 }
 
 pub fn check_genesis(chain_id: u64, genesis: &[u8; 32]) -> Result<(), String> {
+    if let Some(name) = RETIRED_CHAIN_NAMES
+        .iter()
+        .find(|name| chain_id_from_name(name) == chain_id)
+    {
+        return Err(format!(
+            "the chain id {chain_id} belongs to the retired network {name}, refusing to sign for it"
+        ));
+    }
     if *genesis == [0u8; 32] && (chain_id == testnet_chain_id() || chain_id == MAINNET_CHAIN_ID) {
         return Err(
             "a transaction for a public network needs that network's genesis hash, not zero, refusing to sign"
@@ -1819,7 +1861,7 @@ mod client {
             }
             let id = crate::checked_chain_id(name)?;
             let name_shown = crate::shown(name);
-            let is_mainnet = is_mainnet_chain(name);
+            let is_mainnet = is_mainnet_info(info);
             if let Some(configured) = &self.network.chain_id {
                 if name != configured {
                     return Err(format!(
@@ -1827,7 +1869,9 @@ mod client {
                     ));
                 }
             } else {
-                if is_public_chain(name) && !(is_mainnet && self.acknowledge_mainnet) {
+                if (is_public_chain(name) || is_mainnet)
+                    && !(is_mainnet && self.acknowledge_mainnet)
+                {
                     return Err(format!(
                         "the gateway reports the public chain {name_shown} but this client was opened for an unnamed network, configure the testnet or mainnet network before signing for it"
                     ));
@@ -2566,7 +2610,7 @@ mod client {
             self.vet_target(&sender, &[target])?;
             let info = self.node_info()?;
             self.guard_mainnet()?;
-            let deploy_fee = if target == vm_deploy_address() {
+            let deploy_fee = if same_address(target, &vm_deploy_address()) {
                 deploy_fee_of(&info)?
             } else {
                 0
