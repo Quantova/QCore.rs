@@ -44,6 +44,10 @@ pub const MAINNET_GENESIS_HASH: Option<[u8; 32]> = None;
 
 pub const MAINNET_ROSTER_COMMITMENT: Option<[u8; 32]> = None;
 
+pub const TESTNET_EPOCH_LENGTH: Option<u64> = Some(65_536);
+
+pub const MAINNET_EPOCH_LENGTH: Option<u64> = None;
+
 pub const ADDRESS_PAYLOAD_LEN: usize = 32;
 
 pub const NATIVE_TRANSFER_METER: u64 = 1_210;
@@ -71,6 +75,7 @@ pub struct Network {
     pub is_mainnet: bool,
     pub genesis_hash: Option<[u8; 32]>,
     pub roster_commitment: Option<[u8; 32]>,
+    pub epoch_length: Option<u64>,
 }
 
 impl Network {
@@ -85,6 +90,7 @@ impl Network {
             is_mainnet: false,
             genesis_hash: TESTNET_GENESIS_HASH,
             roster_commitment: TESTNET_ROSTER_COMMITMENT,
+            epoch_length: TESTNET_EPOCH_LENGTH,
         }
     }
 
@@ -99,6 +105,7 @@ impl Network {
             is_mainnet: true,
             genesis_hash: MAINNET_GENESIS_HASH,
             roster_commitment: MAINNET_ROSTER_COMMITMENT,
+            epoch_length: MAINNET_EPOCH_LENGTH,
         }
     }
 
@@ -113,6 +120,7 @@ impl Network {
             is_mainnet: false,
             genesis_hash: None,
             roster_commitment: None,
+            epoch_length: None,
         }
     }
 }
@@ -1713,7 +1721,7 @@ mod client {
             &self,
             tx_id: &str,
             genesis_hash: &[u8; 32],
-            roster: &[crate::finality::RosterMember],
+            roster: &crate::finality::VerifiedRoster,
         ) -> Result<crate::finality::ConfirmedTransaction, String> {
             use crate::json::{from_hex, object, parse, Json};
             let info = self.node_info()?;
@@ -1765,12 +1773,13 @@ mod client {
                     .and_then(Json::as_str)
                     .ok_or("the finality answer carries no certificate")?,
             )?;
-            let verified = crate::finality::verify_finality(
+            let verified = crate::finality::verify_finality_in_epoch(
                 chain_id,
                 genesis_hash,
+                self.epoch_length()?,
+                roster,
                 &header,
                 &certificate,
-                roster,
             )?;
             if verified.height != height {
                 return Err("the finalized header is not at the height the proof names".to_string());
@@ -1949,12 +1958,18 @@ mod client {
                     },
                 )
             };
+            let epoch_length = self.epoch_length()?;
             while current.epoch < epoch {
                 let next = current.epoch + 1;
                 let answer = parse(&self.rpc(
                     "get_roster_proof",
                     object(vec![("epoch", Json::Int(next))]).render(),
                 )?)?;
+                if answer.get("epoch").and_then(Json::as_u64) != Some(next) {
+                    return Err(format!(
+                        "the gateway answered a roster proof for another epoch when asked for epoch {next}"
+                    ));
+                }
                 let field = |key: &str| -> Result<Vec<u8>, String> {
                     from_hex(
                         answer
@@ -1972,6 +1987,7 @@ mod client {
                 current = crate::finality::verify_next_roster(
                     chain_id,
                     &genesis,
+                    epoch_length,
                     &current,
                     &field("header_bytes")?,
                     &field("certificate")?,
@@ -1992,16 +2008,35 @@ mod client {
             Ok(Some((genesis, current.members)))
         }
 
+        fn epoch_length(&self) -> Result<u64, String> {
+            match self.network.epoch_length {
+                Some(length) if length > 0 => Ok(length),
+                _ => Err(format!(
+                    "no epoch length is pinned for the {} network, so the validator roster for a height cannot be chosen without trusting the gateway; set the network epoch length",
+                    self.network.name
+                )),
+            }
+        }
+
+        fn epoch_of_header(&self, header: &[u8], reported: Option<u64>) -> Result<u64, String> {
+            let height = crate::finality::header_height(header)?;
+            let epoch = crate::finality::epoch_of(height, self.epoch_length()?)?;
+            if let Some(reported) = reported {
+                if reported != epoch {
+                    return Err(format!(
+                        "the gateway names epoch {reported} for height {height}, which lies in epoch {epoch}, refusing to choose a roster on its word"
+                    ));
+                }
+            }
+            Ok(epoch)
+        }
+
         fn certified_at(&self, height: u64) -> Result<(u64, Vec<u8>, Vec<u8>), String> {
             use crate::json::{from_hex, object, parse, Json};
             let finality = parse(&self.rpc(
                 "get_finality",
                 object(vec![("height", Json::Int(height))]).render(),
             )?)?;
-            let epoch = finality
-                .get("epoch")
-                .and_then(Json::as_u64)
-                .ok_or("the finality answer names no epoch")?;
             let header = from_hex(
                 finality
                     .get("header_bytes")
@@ -2014,6 +2049,13 @@ mod client {
                     .and_then(Json::as_str)
                     .ok_or("the finality answer carries no certificate")?,
             )?;
+            if crate::finality::header_height(&header)? != height {
+                return Err(format!(
+                    "the gateway answered a finality proof for another height when asked for height {height}"
+                ));
+            }
+            let epoch =
+                self.epoch_of_header(&header, finality.get("epoch").and_then(Json::as_u64))?;
             Ok((epoch, header, certificate))
         }
 
@@ -2037,15 +2079,16 @@ mod client {
                 }
                 return Ok(());
             };
-            let Some((genesis_hash, roster)) = self.roster_for_epoch(chain_id, epoch)? else {
+            let Some((genesis_hash, members)) = self.roster_for_epoch(chain_id, epoch)? else {
                 return Err("no trusted validator roster is held".to_string());
             };
-            let verified = crate::finality::verify_finality(
+            let verified = crate::finality::verify_finality_in_epoch(
                 chain_id,
                 &genesis_hash,
+                self.epoch_length()?,
+                &crate::finality::VerifiedRoster { epoch, members },
                 &header,
                 &certificate,
-                &roster,
             )?;
             if verified.height != info.head_height {
                 return Err(format!(
@@ -2067,10 +2110,6 @@ mod client {
                 "get_account_proof",
                 object(vec![("address", Json::str(address))]).render(),
             )?)?;
-            let epoch = answer
-                .get("epoch")
-                .and_then(Json::as_u64)
-                .ok_or("the account proof names no epoch")?;
             let field = |key: &str| -> Result<Vec<u8>, String> {
                 from_hex(
                     answer
@@ -2079,6 +2118,9 @@ mod client {
                         .ok_or_else(|| format!("the account proof carries no {key}"))?,
                 )
             };
+            let header = field("header_bytes")?;
+            let epoch =
+                self.epoch_of_header(&header, answer.get("epoch").and_then(Json::as_u64))?;
             let Some((genesis_hash, members)) = self.roster_for_epoch(chain_id, epoch)? else {
                 return Err(
                     "a verified balance needs a trusted validator roster, call trust_roster first"
@@ -2088,9 +2130,10 @@ mod client {
             crate::finality::verify_account(
                 chain_id,
                 &genesis_hash,
+                self.epoch_length()?,
                 &crate::finality::VerifiedRoster { epoch, members },
                 address,
-                &field("header_bytes")?,
+                &header,
                 &field("certificate")?,
                 &field("proof")?,
             )
@@ -2107,13 +2150,17 @@ mod client {
                 return Err("the transaction is not reported as finalised".to_string());
             };
             let (epoch, _, _) = self.certified_at(height)?;
-            let Some((genesis_hash, roster)) = self.roster_for_epoch(chain_id, epoch)? else {
+            let Some((genesis_hash, members)) = self.roster_for_epoch(chain_id, epoch)? else {
                 return Err(
                     "a verified confirmation needs a trusted validator roster, call trust_roster first"
                         .to_string(),
                 );
             };
-            self.confirm_transaction(tx_id, &genesis_hash, &roster)
+            self.confirm_transaction(
+                tx_id,
+                &genesis_hash,
+                &crate::finality::VerifiedRoster { epoch, members },
+            )
         }
 
         fn validity(&self, info: &NodeInfo) -> Result<u64, String> {

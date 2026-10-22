@@ -109,6 +109,7 @@ fn mainnet_at(base: &str) -> Network {
         is_mainnet: true,
         genesis_hash: Some([0u8; 32]),
         roster_commitment: None,
+        epoch_length: None,
     }
 }
 

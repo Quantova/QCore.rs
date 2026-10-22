@@ -14,7 +14,7 @@ use qtv_block::{header_from_bytes, verify_inclusion, MerkleProof, MerkleStep};
 use qtv_codec::Decoder;
 use qtv_crypto::ml_dsa::{self, PUBLIC_KEY_BYTES, SIGNATURE_BYTES};
 use qtv_sampler::onetime::{MerklePath, Root, NODE_BYTES, PREIMAGE_BYTES};
-use qtv_sampler::params::{MAX_ACTIVE_VALIDATORS, MIN_SELF_STAKE};
+use qtv_sampler::params::{finality_threshold, MAX_ACTIVE_VALIDATORS, MIN_SELF_STAKE};
 use qtv_sampler::sortition::{verify_membership, Credential};
 
 const PARENT_GENESIS: u8 = 0;
@@ -77,12 +77,18 @@ pub fn verify_finality(
         return Err("the validator roster is empty or too large".to_string());
     }
     let mut ids = BTreeSet::new();
+    let mut keys = BTreeSet::new();
     for member in roster {
         if !ids.insert(member.id) {
             return Err("the validator roster names a validator twice".to_string());
         }
         if member.attest_pk.len() != PUBLIC_KEY_BYTES {
             return Err("a roster key is not an ML-DSA-65 public key".to_string());
+        }
+        if !keys.insert(member.attest_pk.as_slice()) {
+            return Err(
+                "the validator roster gives two validators the same attestation key".to_string(),
+            );
         }
     }
     let roster = active_set(roster);
@@ -174,6 +180,14 @@ pub fn verify_finality(
     if signed.saturating_mul(3) < total.saturating_mul(2) {
         return Err("the attesting validators hold less than two thirds of the stake".to_string());
     }
+    let seats = finality_threshold(roster.len() as u64);
+    if (seen.len() as u64) < seats {
+        return Err(format!(
+            "{} validators attest but finality needs {seats} of the {} seats in the committee",
+            seen.len(),
+            roster.len()
+        ));
+    }
     Ok(FinalizedHeader {
         height: header.height(),
         hash,
@@ -221,9 +235,59 @@ fn state_proof(bytes: &[u8]) -> Result<qtv_state::Proof, String> {
     qtv_codec::from_bytes(bytes).map_err(|_| "the state proof is malformed".to_string())
 }
 
+pub fn epoch_of(height: u64, epoch_length: u64) -> Result<u64, String> {
+    if epoch_length == 0 {
+        return Err("the epoch length must be at least one block".to_string());
+    }
+    Ok(height / epoch_length)
+}
+
+pub fn header_height(header_bytes: &[u8]) -> Result<u64, String> {
+    header_from_bytes(header_bytes)
+        .map(|header| header.height())
+        .map_err(|_| "the header bytes are malformed".to_string())
+}
+
+pub fn verify_finality_in_epoch(
+    chain_id: u64,
+    genesis_hash: &[u8; 32],
+    epoch_length: u64,
+    roster: &VerifiedRoster,
+    header_bytes: &[u8],
+    certificate_bytes: &[u8],
+) -> Result<FinalizedHeader, String> {
+    let epoch = epoch_of(header_height(header_bytes)?, epoch_length)?;
+    if epoch != roster.epoch {
+        return Err(format!(
+            "the header lies in epoch {epoch} but the roster offered to certify it is the roster of epoch {}, refusing a roster from another epoch",
+            roster.epoch
+        ));
+    }
+    verify_finality(
+        chain_id,
+        genesis_hash,
+        header_bytes,
+        certificate_bytes,
+        &roster.members,
+    )
+}
+
+pub fn sealing_height(epoch: u64, epoch_length: u64) -> Result<u64, String> {
+    if epoch_length == 0 {
+        return Err("the epoch length must be at least one block".to_string());
+    }
+    epoch
+        .checked_add(1)
+        .and_then(|next| next.checked_mul(epoch_length))
+        .and_then(|start| start.checked_sub(1))
+        .ok_or_else(|| "the roster epoch is at its limit".to_string())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn verify_next_roster(
     chain_id: u64,
     genesis_hash: &[u8; 32],
+    epoch_length: u64,
     current: &VerifiedRoster,
     header_bytes: &[u8],
     certificate_bytes: &[u8],
@@ -237,12 +301,21 @@ pub fn verify_next_roster(
         .epoch
         .checked_add(1)
         .ok_or("the roster epoch is at its limit")?;
-    let header = verify_finality(
+    let sealing = sealing_height(current.epoch, epoch_length)?;
+    let height = header_height(header_bytes)?;
+    if height != sealing {
+        return Err(format!(
+            "the roster for epoch {next} must be proven at height {sealing}, the block that seals epoch {}, not at height {height}",
+            current.epoch
+        ));
+    }
+    let header = verify_finality_in_epoch(
         chain_id,
         genesis_hash,
+        epoch_length,
+        current,
         header_bytes,
         certificate_bytes,
-        &current.members,
     )?;
     let proof = state_proof(proof_bytes)?;
     let expected = roster_commitment_of(next, &next_members);
@@ -262,9 +335,11 @@ pub fn verify_next_roster(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn verify_account(
     chain_id: u64,
     genesis_hash: &[u8; 32],
+    epoch_length: u64,
     roster: &VerifiedRoster,
     address: &str,
     header_bytes: &[u8],
@@ -274,12 +349,13 @@ pub fn verify_account(
     if !crate::valid_address(address) {
         return Err("the address is not a Q1 address".to_string());
     }
-    let header = verify_finality(
+    let header = verify_finality_in_epoch(
         chain_id,
         genesis_hash,
+        epoch_length,
+        roster,
         header_bytes,
         certificate_bytes,
-        &roster.members,
     )?;
     let proof = state_proof(proof_bytes)?;
     if !qtv_state::verify(&account_state_key(address), &proof, &header.q_root) {
