@@ -7,11 +7,11 @@ use qtv_wipe::Zeroizing;
 
 use crate::json::{self, object, Json};
 
-pub const CONTRACT_CONTEXT_BYTES: u64 = 120;
+pub const CONTRACT_CONTEXT_BYTES: u64 = 152;
 
 const WORD: u64 = 8;
 
-const SIGNED_MSG_TAG: &[u8; 8] = b"QTVSGN03";
+const SIGNED_MSG_TAG: &[u8; 8] = b"QTVSGN04";
 const ORDER_LAYOUT_TAG: &[u8; 8] = b"QTVLAYT1";
 
 pub const LAYOUT_HASH_BYTES: usize = 32;
@@ -19,13 +19,14 @@ const NONCE_TAG: &[u8; 8] = b"QTVNONCE";
 
 const MSG_TAG_OFF: usize = 0;
 const MSG_CHAIN_OFF: usize = 8;
-const MSG_CONTRACT_OFF: usize = 16;
-const MSG_SELECTOR_OFF: usize = 48;
-const MSG_SIGNER_OFF: usize = 56;
-const MSG_NONCE_OFF: usize = 88;
-const MSG_EXPIRY_OFF: usize = 96;
-const MSG_LAYOUT_OFF: usize = 104;
-const MSG_FIELDS_OFF: usize = 136;
+const MSG_GENESIS_OFF: usize = 16;
+const MSG_CONTRACT_OFF: usize = 48;
+const MSG_SELECTOR_OFF: usize = 80;
+const MSG_SIGNER_OFF: usize = 88;
+const MSG_NONCE_OFF: usize = 120;
+const MSG_EXPIRY_OFF: usize = 128;
+const MSG_LAYOUT_OFF: usize = 136;
+const MSG_FIELDS_OFF: usize = 168;
 
 pub const DEFAULT_REGION_OFFSET: u64 = 8192;
 
@@ -188,6 +189,7 @@ pub struct FieldArg {
 #[allow(clippy::too_many_arguments)]
 pub fn canonical_order_message_typed(
     chain_id: u64,
+    genesis: &[u8; 32],
     contract_id: &[u8; 32],
     selector: [u8; 4],
     signer: &[u8; 32],
@@ -201,6 +203,8 @@ pub fn canonical_order_message_typed(
     msg.extend_from_slice(SIGNED_MSG_TAG);
     debug_assert_eq!(msg.len(), MSG_CHAIN_OFF);
     msg.extend_from_slice(&chain_id.to_be_bytes());
+    debug_assert_eq!(msg.len(), MSG_GENESIS_OFF);
+    msg.extend_from_slice(genesis);
     debug_assert_eq!(msg.len(), MSG_CONTRACT_OFF);
     msg.extend_from_slice(contract_id);
     debug_assert_eq!(msg.len(), MSG_SELECTOR_OFF);
@@ -223,6 +227,7 @@ pub fn canonical_order_message_typed(
 #[allow(clippy::too_many_arguments)]
 pub fn canonical_order_message(
     chain_id: u64,
+    genesis: &[u8; 32],
     contract_id: &[u8; 32],
     selector: [u8; 4],
     signer: &[u8; 32],
@@ -234,6 +239,7 @@ pub fn canonical_order_message(
     let typed: Vec<FieldValue> = fields.iter().copied().map(FieldValue::Word).collect();
     canonical_order_message_typed(
         chain_id,
+        genesis,
         contract_id,
         selector,
         signer,
@@ -319,6 +325,7 @@ fn field_value_of_width(width: u64, value: &str) -> Result<FieldValue, String> {
 #[allow(clippy::too_many_arguments)]
 pub fn build_order_from_typed(
     chain_id: u64,
+    genesis: &[u8; 32],
     contract: &str,
     selector: [u8; 4],
     layout_hash: &[u8; LAYOUT_HASH_BYTES],
@@ -343,6 +350,7 @@ pub fn build_order_from_typed(
         .collect();
     build_typed_order_call(
         chain_id,
+        genesis,
         contract,
         selector,
         layout_hash,
@@ -360,6 +368,7 @@ pub fn build_order_from_typed(
 
 pub fn build_signed_order_call(
     chain_id: u64,
+    genesis: &[u8; 32],
     contract: &str,
     selector: [u8; 4],
     layout: &OrderLayout,
@@ -386,6 +395,7 @@ pub fn build_signed_order_call(
         .collect();
     build_typed_order_call(
         chain_id,
+        genesis,
         contract,
         selector,
         &layout.layout_hash,
@@ -404,6 +414,7 @@ pub fn build_signed_order_call(
 #[allow(clippy::too_many_arguments)]
 pub fn build_typed_order_call(
     chain_id: u64,
+    genesis: &[u8; 32],
     contract: &str,
     selector: [u8; 4],
     layout_hash: &[u8; LAYOUT_HASH_BYTES],
@@ -426,6 +437,7 @@ pub fn build_typed_order_call(
     if expiry == 0 {
         return Err("the order expiry must be set".to_string());
     }
+    crate::check_genesis(chain_id, genesis)?;
     if scheme_off < CONTRACT_CONTEXT_BYTES
         || ptr_off < CONTRACT_CONTEXT_BYTES
         || expiry_off < CONTRACT_CONTEXT_BYTES
@@ -456,6 +468,7 @@ pub fn build_typed_order_call(
     let values: Vec<FieldValue> = fields.iter().map(|f| f.value.clone()).collect();
     let message = canonical_order_message_typed(
         chain_id,
+        genesis,
         &contract_id,
         selector,
         &signer,
@@ -843,6 +856,8 @@ pub fn event_word(data: &[u8]) -> Option<u64> {
 mod tests {
     use super::*;
 
+    const TEST_GENESIS: [u8; 32] = [0x5a; 32];
+
     #[test]
     fn a_symbol_round_trips_through_the_metadata_word() {
         for symbol in ["LTK", "USDC", "WBTC", "wstETH", "Q"] {
@@ -861,7 +876,7 @@ mod tests {
     const TEST_LAYOUT: [u8; LAYOUT_HASH_BYTES] = [0x4c; LAYOUT_HASH_BYTES];
 
     fn counter_layout() -> OrderLayout {
-        OrderLayout::new(120, 128, 144, vec![136], TEST_EXPIRY, TEST_LAYOUT)
+        OrderLayout::new(152, 160, 176, vec![168], TEST_EXPIRY, TEST_LAYOUT)
     }
 
     #[test]
@@ -886,6 +901,7 @@ mod tests {
         let layout = counter_layout();
         let order = build_signed_order_call(
             TEST_CHAIN,
+            &TEST_GENESIS,
             &contract,
             BUMP_SELECTOR,
             &layout,
@@ -896,9 +912,9 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(word_at(&order.user_memory, 120), u64::from(SCHEME_LATTICE));
-        assert_eq!(word_at(&order.user_memory, 128), DEFAULT_REGION_OFFSET);
-        assert_eq!(word_at(&order.user_memory, 136), 5);
+        assert_eq!(word_at(&order.user_memory, 152), u64::from(SCHEME_LATTICE));
+        assert_eq!(word_at(&order.user_memory, 160), DEFAULT_REGION_OFFSET);
+        assert_eq!(word_at(&order.user_memory, 168), 5);
 
         assert!(order.user_memory[..CONTRACT_CONTEXT_BYTES as usize]
             .iter()
@@ -914,6 +930,7 @@ mod tests {
         let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
         let order = build_signed_order_call(
             TEST_CHAIN,
+            &TEST_GENESIS,
             &contract,
             BUMP_SELECTOR,
             &counter_layout(),
@@ -945,6 +962,7 @@ mod tests {
         let contract_id = super::contract_id(&contract).unwrap();
         let expected = canonical_order_message(
             TEST_CHAIN,
+            &TEST_GENESIS,
             &contract_id,
             BUMP_SELECTOR,
             &signer,
@@ -955,6 +973,7 @@ mod tests {
         );
         let order = build_signed_order_call(
             TEST_CHAIN,
+            &TEST_GENESIS,
             &contract,
             BUMP_SELECTOR,
             &counter_layout(),
@@ -967,10 +986,10 @@ mod tests {
         assert_eq!(order.message, expected);
         assert_eq!(
             order.message.len(),
-            144,
-            "tag 8, chain 8, contract 32, selector 8, signer 32, nonce 8, expiry 8, layout 32, one field 8"
+            176,
+            "tag 8, chain 8, genesis 32, contract 32, selector 8, signer 32, nonce 8, expiry 8, layout 32, one field 8"
         );
-        assert_eq!(word_at(&order.user_memory, 144), TEST_EXPIRY);
+        assert_eq!(word_at(&order.user_memory, 176), TEST_EXPIRY);
         assert_eq!(order.expiry, TEST_EXPIRY);
 
         assert!(ml_dsa::verify(
@@ -981,18 +1000,59 @@ mod tests {
         ));
     }
 
-    const PINNED_ORDER_PREIMAGE: [u8; 144] = [
-        0x51, 0x54, 0x56, 0x53, 0x47, 0x4e, 0x30, 0x33, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd,
-        0xef, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33,
+    const PINNED_ORDER_PREIMAGE: [u8; 176] = [
+        0x51, 0x54, 0x56, 0x53, 0x47, 0x4e, 0x30, 0x34, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd,
+        0xef, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a,
+        0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a,
+        0x5a, 0x5a, 0x5a, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33,
         0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33,
-        0x33, 0x33, 0x33, 0x00, 0x00, 0x00, 0x00, 0x6c, 0xad, 0x12, 0xfc, 0x11, 0x11, 0x11, 0x11,
+        0x33, 0x33, 0x33, 0x33, 0x33, 0x00, 0x00, 0x00, 0x00, 0x6c, 0xad, 0x12, 0xfc, 0x11, 0x11,
         0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
-        0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x71, 0x3f, 0xb3, 0x00, 0x4c,
+        0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x71, 0x3f, 0xb3,
+        0x00, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c,
         0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c,
-        0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c, 0x4c,
-        0x4c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2a,
+        0x4c, 0x4c, 0x4c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2a,
     ];
+
+    #[test]
+    fn an_order_bound_to_one_genesis_differs_on_another() {
+        let contract = [0x33; 32];
+        let signer = [0x11; 32];
+        let a = canonical_order_message(
+            7,
+            &[0x5a; 32],
+            &contract,
+            BUMP_SELECTOR,
+            &signer,
+            3,
+            100,
+            &TEST_LAYOUT,
+            &[42],
+        );
+        let b = canonical_order_message(
+            7,
+            &[0x6b; 32],
+            &contract,
+            BUMP_SELECTOR,
+            &signer,
+            3,
+            100,
+            &TEST_LAYOUT,
+            &[42],
+        );
+        assert_ne!(
+            a, b,
+            "an order signed under one genesis must not verify under another"
+        );
+        assert_eq!(
+            &a[16..48],
+            &[0x5a; 32],
+            "the genesis follows the chain word"
+        );
+        assert_eq!(a[..16], b[..16]);
+        assert_eq!(a[48..], b[48..]);
+    }
 
     #[test]
     fn an_order_bound_to_one_chain_differs_on_another() {
@@ -1000,6 +1060,7 @@ mod tests {
         let signer = [0x11; 32];
         let a = canonical_order_message(
             7,
+            &TEST_GENESIS,
             &contract,
             BUMP_SELECTOR,
             &signer,
@@ -1010,6 +1071,7 @@ mod tests {
         );
         let b = canonical_order_message(
             9,
+            &TEST_GENESIS,
             &contract,
             BUMP_SELECTOR,
             &signer,
@@ -1023,7 +1085,7 @@ mod tests {
             "the same order under two chains signs a different preimage"
         );
         assert_eq!(a[..8], b[..8], "the tag is fixed");
-        assert_eq!(a[16..], b[16..], "only the chain word differs");
+        assert_eq!(a[48..], b[48..], "only the chain word differs");
         assert_eq!(&a[..8], SIGNED_MSG_TAG);
         assert_eq!(&a[8..16], &7u64.to_be_bytes());
     }
@@ -1034,6 +1096,7 @@ mod tests {
         let signer = [0x11; 32];
         let a = canonical_order_message(
             7,
+            &TEST_GENESIS,
             &contract,
             BUMP_SELECTOR,
             &signer,
@@ -1044,6 +1107,7 @@ mod tests {
         );
         let b = canonical_order_message(
             7,
+            &TEST_GENESIS,
             &contract,
             BUMP_SELECTOR,
             &signer,
@@ -1053,11 +1117,11 @@ mod tests {
             &[42],
         );
         assert_ne!(a, b);
-        assert_eq!(&a[96..104], &100u64.to_be_bytes());
-        assert_eq!(a[..96], b[..96]);
-        assert_eq!(a[104..], b[104..]);
+        assert_eq!(&a[128..136], &100u64.to_be_bytes());
+        assert_eq!(a[..128], b[..128]);
+        assert_eq!(a[136..], b[136..]);
         assert_eq!(
-            &a[104..136],
+            &a[136..168],
             &TEST_LAYOUT,
             "the layout hash follows the expiry"
         );
@@ -1067,6 +1131,7 @@ mod tests {
     fn the_order_preimage_matches_the_pinned_vector() {
         let preimage = canonical_order_message(
             0x0123_4567_89AB_CDEF,
+            &TEST_GENESIS,
             &[0x33; 32],
             BUMP_SELECTOR,
             &[0x11; 32],
@@ -1077,8 +1142,8 @@ mod tests {
         );
         assert_eq!(
             preimage.len(),
-            144,
-            "tag 8, chain 8, contract 32, selector 8, signer 32, nonce 8, expiry 8, layout 32, field 8"
+            176,
+            "tag 8, chain 8, genesis 32, contract 32, selector 8, signer 32, nonce 8, expiry 8, layout 32, field 8"
         );
         assert_eq!(preimage.as_slice(), PINNED_ORDER_PREIMAGE.as_slice());
         let counter = order_layout_hash(
@@ -1105,17 +1170,18 @@ mod tests {
         let seed = [2u8; crate::SEED_LEN];
         let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
         let field = [FieldArg {
-            offset: 136,
+            offset: 168,
             value: FieldValue::Word(1),
         }];
         for expiry_off in [64, 136] {
             assert!(build_typed_order_call(
                 TEST_CHAIN,
+                &TEST_GENESIS,
                 &contract,
                 BUMP_SELECTOR,
                 &TEST_LAYOUT,
-                120,
-                128,
+                152,
+                160,
                 expiry_off,
                 DEFAULT_REGION_OFFSET,
                 &field,
@@ -1142,6 +1208,7 @@ mod tests {
         let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
         assert!(build_signed_order_call(
             TEST_CHAIN,
+            &TEST_GENESIS,
             &contract,
             BUMP_SELECTOR,
             &counter_layout(),
@@ -1187,21 +1254,22 @@ mod tests {
         let amount: u128 = (1u128 << 64) + 100;
         let fields = vec![
             FieldArg {
-                offset: 168,
+                offset: 200,
                 value: FieldValue::wide(amount),
             },
             FieldArg {
-                offset: 136,
+                offset: 168,
                 value: FieldValue::Address(to),
             },
         ];
         let order = build_typed_order_call(
             TEST_CHAIN,
+            &TEST_GENESIS,
             &contract,
             MINT_SELECTOR,
             &TEST_LAYOUT,
-            120,
-            128,
+            152,
+            160,
             TEST_EXPIRY_OFF,
             DEFAULT_REGION_OFFSET,
             &fields,
@@ -1214,31 +1282,31 @@ mod tests {
 
         assert_eq!(
             order.message.len(),
-            136 + 16 + 32,
+            168 + 16 + 32,
             "the wide amount widens the preimage to 184 bytes"
         );
         assert_eq!(
-            &order.message[136..144],
+            &order.message[168..176],
             &100u64.to_be_bytes(),
             "the amount low word is first"
         );
         assert_eq!(
-            &order.message[144..152],
+            &order.message[176..184],
             &1u64.to_be_bytes(),
             "the amount high word is second"
         );
         assert_eq!(
-            &order.message[152..184],
+            &order.message[184..216],
             &to,
             "the address follows the wide amount"
         );
         assert_eq!(
-            word_at(&order.user_memory, 168),
+            word_at(&order.user_memory, 200),
             100,
             "the argument region carries the low word"
         );
-        assert_eq!(word_at(&order.user_memory, 176), 1, "then the high word");
-        assert_eq!(&order.user_memory[136..168], &to);
+        assert_eq!(word_at(&order.user_memory, 208), 1, "then the high word");
+        assert_eq!(&order.user_memory[168..200], &to);
         assert!(ml_dsa::verify(
             order.public_key.as_slice().try_into().unwrap(),
             &order.message,
@@ -1255,23 +1323,24 @@ mod tests {
         let to_hex: String = to.iter().map(|b| format!("{b:02x}")).collect();
         let fields = vec![
             TypedField {
-                offset: 168,
+                offset: 200,
                 width: 16,
                 value: "18446744073709551716".to_string(),
             },
             TypedField {
-                offset: 136,
+                offset: 168,
                 width: 32,
                 value: to_hex,
             },
         ];
         let order = build_order_from_typed(
             TEST_CHAIN,
+            &TEST_GENESIS,
             &contract,
             MINT_SELECTOR,
             &TEST_LAYOUT,
-            120,
-            128,
+            152,
+            160,
             TEST_EXPIRY_OFF,
             DEFAULT_REGION_OFFSET,
             &fields,
@@ -1283,12 +1352,12 @@ mod tests {
         .unwrap();
         assert_eq!(
             order.message.len(),
-            136 + 16 + 32,
+            168 + 16 + 32,
             "the descriptor width widens the preimage"
         );
-        assert_eq!(&order.message[136..144], &100u64.to_be_bytes());
-        assert_eq!(&order.message[144..152], &1u64.to_be_bytes());
-        assert_eq!(&order.message[152..184], &to);
+        assert_eq!(&order.message[168..176], &100u64.to_be_bytes());
+        assert_eq!(&order.message[176..184], &1u64.to_be_bytes());
+        assert_eq!(&order.message[184..216], &to);
         assert!(ml_dsa::verify(
             order.public_key.as_slice().try_into().unwrap(),
             &order.message,
@@ -1305,23 +1374,24 @@ mod tests {
         let to_hex: String = to.iter().map(|b| format!("{b:02x}")).collect();
         let fields = vec![
             TypedField {
-                offset: 168,
+                offset: 200,
                 width: 16,
                 value: "18446744073709551716".to_string(),
             },
             TypedField {
-                offset: 136,
+                offset: 168,
                 width: 32,
                 value: to_hex,
             },
         ];
         let order = build_order_from_typed(
             TEST_CHAIN,
+            &TEST_GENESIS,
             &contract,
             MINT_SELECTOR,
             &TEST_LAYOUT,
-            120,
-            128,
+            152,
+            160,
             TEST_EXPIRY_OFF,
             0,
             &fields,
@@ -1333,11 +1403,11 @@ mod tests {
         .unwrap();
         let mem = &order.call_args[4..];
         assert_eq!(
-            &mem[136..168],
+            &mem[168..200],
             &to,
             "the executable recipient matches the signed recipient"
         );
-        assert_eq!(&order.message[152..184], &to);
+        assert_eq!(&order.message[184..216], &to);
         let base = DEFAULT_REGION_OFFSET as usize;
         assert_eq!(
             &mem[base..base + order.public_key.len()],
@@ -1360,7 +1430,7 @@ mod tests {
         let to_hex: String = to.iter().map(|b| format!("{b:02x}")).collect();
         let fields = vec![
             TypedField {
-                offset: 136,
+                offset: 168,
                 width: 16,
                 value: "500".to_string(),
             },
@@ -1372,11 +1442,12 @@ mod tests {
         ];
         let err = build_order_from_typed(
             TEST_CHAIN,
+            &TEST_GENESIS,
             &contract,
             MINT_SELECTOR,
             &TEST_LAYOUT,
-            120,
-            128,
+            152,
+            160,
             TEST_EXPIRY_OFF,
             DEFAULT_REGION_OFFSET,
             &fields,
@@ -1395,21 +1466,22 @@ mod tests {
         let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
         let fields = vec![
             FieldArg {
-                offset: 136,
+                offset: 168,
                 value: FieldValue::Address([0u8; 32]),
             },
             FieldArg {
-                offset: 140,
+                offset: 172,
                 value: FieldValue::Word(1),
             },
         ];
         let err = build_typed_order_call(
             TEST_CHAIN,
+            &TEST_GENESIS,
             &contract,
             MINT_SELECTOR,
             &TEST_LAYOUT,
-            120,
-            128,
+            152,
+            160,
             TEST_EXPIRY_OFF,
             DEFAULT_REGION_OFFSET,
             &fields,
@@ -1428,25 +1500,26 @@ mod tests {
         let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
         let fields = vec![
             FieldArg {
-                offset: 136,
+                offset: 168,
                 value: FieldValue::Address([0u8; 32]),
             },
             FieldArg {
-                offset: 144,
+                offset: 176,
                 value: FieldValue::Word(1),
             },
             FieldArg {
-                offset: 150,
+                offset: 182,
                 value: FieldValue::Word(1),
             },
         ];
         let err = build_typed_order_call(
             TEST_CHAIN,
+            &TEST_GENESIS,
             &contract,
             MINT_SELECTOR,
             &TEST_LAYOUT,
-            120,
-            128,
+            152,
+            160,
             TEST_EXPIRY_OFF,
             DEFAULT_REGION_OFFSET,
             &fields,
@@ -1464,16 +1537,17 @@ mod tests {
         let seed = [4u8; crate::SEED_LEN];
         let contract = crate::contract_address(&crate::account_address(&seed, 0), 0).unwrap();
         let fields = vec![FieldArg {
-            offset: 128,
+            offset: 160,
             value: FieldValue::Word(1),
         }];
         let err = build_typed_order_call(
             TEST_CHAIN,
+            &TEST_GENESIS,
             &contract,
             BUMP_SELECTOR,
             &TEST_LAYOUT,
-            120,
-            128,
+            152,
+            160,
             TEST_EXPIRY_OFF,
             DEFAULT_REGION_OFFSET,
             &fields,
@@ -1497,11 +1571,12 @@ mod tests {
         }];
         let err = build_order_from_typed(
             TEST_CHAIN,
+            &TEST_GENESIS,
             &contract,
             MINT_SELECTOR,
             &TEST_LAYOUT,
-            120,
-            128,
+            152,
+            160,
             TEST_EXPIRY_OFF,
             DEFAULT_REGION_OFFSET,
             &fields,
@@ -1527,21 +1602,22 @@ mod tests {
         let to = [0xABu8; 32];
         let fields = vec![
             FieldArg {
-                offset: 168,
+                offset: 200,
                 value: FieldValue::Word(500),
             },
             FieldArg {
-                offset: 136,
+                offset: 168,
                 value: FieldValue::Address(to),
             },
         ];
         let order = build_typed_order_call(
             TEST_CHAIN,
+            &TEST_GENESIS,
             &contract,
             MINT_SELECTOR,
             &TEST_LAYOUT,
-            120,
-            128,
+            152,
+            160,
             TEST_EXPIRY_OFF,
             DEFAULT_REGION_OFFSET,
             &fields,
@@ -1552,14 +1628,14 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(order.message.len(), 136 + 8 + 32);
-        assert_eq!(&order.message[136..144], &500u64.to_be_bytes());
-        assert_eq!(&order.message[144..176], &to);
+        assert_eq!(order.message.len(), 168 + 8 + 32);
+        assert_eq!(&order.message[168..176], &500u64.to_be_bytes());
+        assert_eq!(&order.message[176..208], &to);
 
-        assert_eq!(word_at(&order.user_memory, 168), 500);
-        assert_eq!(&order.user_memory[136..168], &to);
-        assert_eq!(word_at(&order.user_memory, 120), u64::from(SCHEME_LATTICE));
-        assert_eq!(word_at(&order.user_memory, 128), DEFAULT_REGION_OFFSET);
+        assert_eq!(word_at(&order.user_memory, 200), 500);
+        assert_eq!(&order.user_memory[168..200], &to);
+        assert_eq!(word_at(&order.user_memory, 152), u64::from(SCHEME_LATTICE));
+        assert_eq!(word_at(&order.user_memory, 160), DEFAULT_REGION_OFFSET);
 
         assert!(ml_dsa::verify(
             order.public_key.as_slice().try_into().unwrap(),
@@ -1576,11 +1652,11 @@ mod tests {
             MINT_SELECTOR,
             &[
                 FieldArg {
-                    offset: 120,
+                    offset: 152,
                     value: FieldValue::Address(to),
                 },
                 FieldArg {
-                    offset: 130,
+                    offset: 162,
                     value: FieldValue::Word(7),
                 },
             ],
@@ -1595,19 +1671,19 @@ mod tests {
             MINT_SELECTOR,
             &[
                 FieldArg {
-                    offset: 120,
+                    offset: 152,
                     value: FieldValue::Address(to),
                 },
                 FieldArg {
-                    offset: 152,
+                    offset: 184,
                     value: FieldValue::Word(7),
                 },
             ],
         )
         .unwrap();
-        assert_eq!(&ok[4 + 120..4 + 152], &to, "a laid out address survives");
+        assert_eq!(&ok[4 + 152..4 + 184], &to, "a laid out address survives");
         assert_eq!(
-            word_at(&ok[4..], 152),
+            word_at(&ok[4..], 184),
             7,
             "the word that sits after it survives too"
         );
@@ -1622,11 +1698,12 @@ mod tests {
         let build = |fields: &[FieldArg]| {
             build_typed_order_call(
                 TEST_CHAIN,
+                &TEST_GENESIS,
                 &contract,
                 MINT_SELECTOR,
                 &TEST_LAYOUT,
-                120,
-                128,
+                152,
+                160,
                 TEST_EXPIRY_OFF,
                 DEFAULT_REGION_OFFSET,
                 fields,
@@ -1640,21 +1717,21 @@ mod tests {
 
         let here = build(&[
             FieldArg {
-                offset: 168,
+                offset: 200,
                 value: FieldValue::Word(500),
             },
             FieldArg {
-                offset: 136,
+                offset: 168,
                 value: FieldValue::Address(to),
             },
         ]);
         let elsewhere = build(&[
             FieldArg {
-                offset: 232,
+                offset: 264,
                 value: FieldValue::Word(500),
             },
             FieldArg {
-                offset: 200,
+                offset: 232,
                 value: FieldValue::Address(to),
             },
         ]);
@@ -1670,11 +1747,11 @@ mod tests {
 
         let swapped_order = build(&[
             FieldArg {
-                offset: 136,
+                offset: 168,
                 value: FieldValue::Address(to),
             },
             FieldArg {
-                offset: 168,
+                offset: 200,
                 value: FieldValue::Word(500),
             },
         ]);
@@ -1691,6 +1768,7 @@ mod tests {
         let layout = counter_layout();
         let word = build_signed_order_call(
             TEST_CHAIN,
+            &TEST_GENESIS,
             &contract,
             BUMP_SELECTOR,
             &layout,
@@ -1702,6 +1780,7 @@ mod tests {
         .unwrap();
         let typed = build_typed_order_call(
             TEST_CHAIN,
+            &TEST_GENESIS,
             &contract,
             BUMP_SELECTOR,
             &TEST_LAYOUT,
@@ -1710,7 +1789,7 @@ mod tests {
             layout.expiry_off,
             layout.region_off,
             &[FieldArg {
-                offset: 136,
+                offset: 168,
                 value: FieldValue::Word(7),
             }],
             &seed,
@@ -1737,11 +1816,11 @@ mod tests {
             selector,
             &[
                 FieldArg {
-                    offset: 120,
+                    offset: 152,
                     value: FieldValue::Address(to),
                 },
                 FieldArg {
-                    offset: 152,
+                    offset: 184,
                     value: FieldValue::Word(200),
                 },
             ],
@@ -1755,8 +1834,8 @@ mod tests {
                 .all(|&b| b == 0),
             "context left for the node"
         );
-        assert_eq!(&mem[120..152], &to);
-        assert_eq!(word_at(mem, 152), 200);
+        assert_eq!(&mem[152..184], &to);
+        assert_eq!(word_at(mem, 184), 200);
     }
 
     #[test]
@@ -1766,11 +1845,11 @@ mod tests {
             selector,
             &[
                 FieldArg {
-                    offset: 120,
+                    offset: 152,
                     value: FieldValue::name("alice"),
                 },
                 FieldArg {
-                    offset: 160,
+                    offset: 192,
                     value: FieldValue::Word(2),
                 },
             ],
@@ -1783,18 +1862,18 @@ mod tests {
                 .all(|&b| b == 0),
             "context stays for the node"
         );
-        assert_eq!(&mem[120..125], b"alice", "the label bytes lead the window");
+        assert_eq!(&mem[152..157], b"alice", "the label bytes lead the window");
         assert!(
-            mem[125..152].iter().all(|&b| b == 0),
+            mem[157..184].iter().all(|&b| b == 0),
             "the window tail is zero padded"
         );
         assert_eq!(
-            word_at(mem, 152),
+            word_at(mem, 184),
             5,
             "the length word sits directly after the window"
         );
         assert_eq!(
-            word_at(mem, 160),
+            word_at(mem, 192),
             2,
             "the following word argument lands after the name"
         );
@@ -1812,7 +1891,7 @@ mod tests {
         let err = build_call_args(
             selector,
             &[FieldArg {
-                offset: 120,
+                offset: 152,
                 value: FieldValue::name(&long),
             }],
         )
@@ -1825,7 +1904,7 @@ mod tests {
         assert!(build_call_args(
             selector,
             &[FieldArg {
-                offset: 120,
+                offset: 152,
                 value: FieldValue::name(&exact)
             }]
         )

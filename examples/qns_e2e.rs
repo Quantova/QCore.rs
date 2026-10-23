@@ -36,15 +36,15 @@ const RESOLVED_SELECTOR: [u8; 4] = [0x48, 0x86, 0x83, 0x53];
 const TRANSFERRED_SELECTOR: [u8; 4] = [0x93, 0x46, 0x83, 0x27];
 const SWEPT_SELECTOR: [u8; 4] = [0x3f, 0xa8, 0xe9, 0xaa];
 
-const LABEL_OFF: u64 = 120;
-const PAYMENT_OFF: u64 = 168;
-const YEARS_OFF: u64 = 160;
-const TARGET_OFF: u64 = 160;
-const TO_OFF: u64 = 160;
-const SWEEP_TO_OFF: u64 = 120;
-const SWEEP_AMOUNT_OFF: u64 = 152;
-const SWEEP_EXPIRY_OFF: u64 = 168;
-const SWEEP_APPROVALS_OFF: u64 = 176;
+const LABEL_OFF: u64 = 152;
+const PAYMENT_OFF: u64 = 200;
+const YEARS_OFF: u64 = 192;
+const TARGET_OFF: u64 = 192;
+const TO_OFF: u64 = 192;
+const SWEEP_TO_OFF: u64 = 152;
+const SWEEP_AMOUNT_OFF: u64 = 184;
+const SWEEP_EXPIRY_OFF: u64 = 200;
+const SWEEP_APPROVALS_OFF: u64 = 208;
 const SWEEP_THRESHOLD: usize = 5;
 
 const BASE3_SLOT: u64 = 28;
@@ -95,6 +95,7 @@ fn run() -> Result<(), String> {
     let info = client.node_info()?;
     let fee = qcore::vm_call_fee(info.transfer_fee, METER);
     let chain_id = chain_id_from_name(&info.chain_id);
+    let genesis = qcore::parse_genesis(&info)?;
     println!(
         "network {} at height {}, fee {} {}",
         info.chain_id, info.head_height, fee, info.denomination
@@ -426,6 +427,7 @@ fn run() -> Result<(), String> {
     forged.push((STRANGER_SEED, (SWEEP_THRESHOLD - 1) as u64, stranger_nonce));
     let bad_args = sweep_call(
         chain_id,
+        &genesis,
         &contract,
         &forged,
         &stranger_id,
@@ -451,6 +453,7 @@ fn run() -> Result<(), String> {
     }
     let sweep_args = sweep_call(
         chain_id,
+        &genesis,
         &contract,
         &members,
         &a_id,
@@ -589,6 +592,7 @@ fn put_bytes(memory: &mut Vec<u8>, offset: u64, bytes: &[u8]) {
 
 fn sweep_call(
     chain_id: u64,
+    genesis: &[u8; 32],
     contract: &str,
     members: &[([u8; 32], u64, u64)],
     to: &[u8; 32],
@@ -626,6 +630,7 @@ fn sweep_call(
         let index_off = scheme_off + 16;
         let order = build_typed_order_call(
             chain_id,
+            genesis,
             contract,
             WITHDRAW_SELECTOR,
             &layout,

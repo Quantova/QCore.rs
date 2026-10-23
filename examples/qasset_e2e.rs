@@ -16,14 +16,14 @@ const TRANSFER_SELECTOR: [u8; 4] = [0xb8, 0x4d, 0xbd, 0x2c];
 const MINTED_SELECTOR: [u8; 4] = [0xaf, 0x05, 0xf8, 0x0a];
 const TRANSFERRED_SELECTOR: [u8; 4] = [0xd2, 0x63, 0xee, 0x7a];
 
-const MINT_TO_OFF: u64 = 120;
-const MINT_SCHEME_OFF: u64 = 152;
-const MINT_PTR_OFF: u64 = 160;
-const MINT_AMOUNT_OFF: u64 = 168;
+const MINT_TO_OFF: u64 = 152;
+const MINT_SCHEME_OFF: u64 = 184;
+const MINT_PTR_OFF: u64 = 192;
+const MINT_AMOUNT_OFF: u64 = 200;
 const MINT_AMOUNT_HI_OFF: u64 = MINT_AMOUNT_OFF + 8;
-const MINT_EXPIRY_OFF: u64 = 184;
-const XFER_TO_OFF: u64 = 120;
-const XFER_AMOUNT_OFF: u64 = 152;
+const MINT_EXPIRY_OFF: u64 = 216;
+const XFER_TO_OFF: u64 = 152;
+const XFER_AMOUNT_OFF: u64 = 184;
 
 const SUPPLY_SLOT: u64 = 4;
 const BAL_BASE: u64 = 1 << 40;

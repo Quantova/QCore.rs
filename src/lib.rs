@@ -2865,12 +2865,14 @@ mod client {
             self.guard_mainnet()?;
             let fee = self.fee_within(vm_call_fee(info.transfer_fee, meter_limit), max_fee)?;
             let chain_id = self.signing_chain_id(&info)?;
+            let genesis = self.signing_genesis(&info)?;
             let valid_until = self.validity(&info)?;
             let signer = contract::order_signer(owner_seed, owner_index);
             let (order_key, nonce, _order_reserved) =
                 self.order_nonce(&info, contract, &signer, expected_order_nonce)?;
             let order = contract::build_signed_order_call(
                 chain_id,
+                &genesis,
                 contract,
                 selector,
                 layout,
@@ -2983,12 +2985,14 @@ mod client {
             self.guard_mainnet()?;
             let fee = self.fee_within(vm_call_fee(info.transfer_fee, meter_limit), max_fee)?;
             let chain_id = self.signing_chain_id(&info)?;
+            let genesis = self.signing_genesis(&info)?;
             let valid_until = self.validity(&info)?;
             let signer = contract::order_signer(owner_seed, owner_index);
             let (order_key, nonce, _order_reserved) =
                 self.order_nonce(&info, contract, &signer, expected_order_nonce)?;
             let order = contract::build_typed_order_call(
                 chain_id,
+                &genesis,
                 contract,
                 selector,
                 layout_hash,

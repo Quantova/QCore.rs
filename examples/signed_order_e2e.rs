@@ -36,7 +36,7 @@ fn run() -> Result<(), String> {
     let step: u64 = args.next().map(|s| s.parse().unwrap_or(5)).unwrap_or(5);
 
     let client = Client::new(url);
-    let layout = OrderLayout::new(120, 128, 144, vec![136], order_expiry(), bump_layout());
+    let layout = OrderLayout::new(152, 160, 176, vec![168], order_expiry(), bump_layout());
 
     let info = client.node_info()?;
     let fee = qcore::vm_call_fee(info.transfer_fee, METER);
