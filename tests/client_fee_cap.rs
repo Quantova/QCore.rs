@@ -329,3 +329,26 @@ fn a_contract_call_pays_the_flat_fee_and_refuses_a_ceiling_below_it() {
         "the flat fee alone pays for a 21,000-meter call (it was 18x under metering)"
     );
 }
+
+#[test]
+fn a_gateway_on_another_genesis_than_the_trusted_roster_is_refused() {
+    let (port, submits) = spawn_gateway(1000);
+    let client = clocked(port);
+    let (pk, _) = qtv_crypto::ml_dsa::keygen(&[9u8; 32]);
+    let roster = qcore::finality::parse_roster(&format!(
+        "[{{\"id\":1,\"attest_pk\":\"{}\",\"stake\":\"1\",\"root\":\"{}\",\"root_slots\":\"1\"}}]",
+        qcore::json::to_hex(&pk),
+        "00".repeat(32)
+    ))
+    .expect("a roster parses");
+    client
+        .trust_roster([0x5a; 32], roster)
+        .expect("a roster is trusted");
+    let seed = [41u8; 32];
+    let to = account_address(&seed, 1);
+    let err = client
+        .transfer(&seed, 0, &to, 1000, 1000)
+        .expect_err("signing for a genesis other than the trusted one must be refused");
+    assert!(err.contains("genesis"), "unexpected error: {err}");
+    assert_eq!(submits.load(Ordering::SeqCst), 0);
+}

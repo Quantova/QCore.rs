@@ -1854,6 +1854,14 @@ mod client {
 
         fn signing_genesis(&self, info: &NodeInfo) -> Result<[u8; 32], String> {
             let reported = crate::parse_genesis(info)?;
+            if let Some((trusted, _)) = self.trusted_roster.borrow().as_ref() {
+                if *trusted != reported {
+                    return Err(
+                        "the gateway reports a genesis hash other than the one whose validator roster this client trusts, refusing to sign"
+                            .to_string(),
+                    );
+                }
+            }
             match self.network.genesis_hash {
                 Some(pinned) if pinned == reported => Ok(pinned),
                 Some(_) => Err(
@@ -2568,6 +2576,7 @@ mod client {
         }
 
         fn validity(&self, info: &NodeInfo) -> Result<u64, String> {
+            self.signing_genesis(info)?;
             let verified = self.verify_head(info)?;
             if !verified && (self.network.is_mainnet || crate::is_public_chain(&info.chain_id)) {
                 return Err(format!(
@@ -3228,7 +3237,7 @@ mod client {
         fn info(chain: &str, head: u64) -> NodeInfo {
             NodeInfo {
                 chain_id: chain.to_string(),
-                genesis_hash: String::new(),
+                genesis_hash: "00".repeat(32),
                 head_height: head,
                 denomination: DENOMINATION.to_string(),
                 transfer_fee: 500,
@@ -3265,7 +3274,10 @@ mod client {
             let public = clocked()
                 .validity(&info("Q-test-net-01", 1_000))
                 .unwrap_err();
-            assert!(public.contains("must be verified"), "{public}");
+            assert!(
+                public.contains("must be verified") || public.contains("no genesis hash is pinned"),
+                "{public}"
+            );
             let ceiling = clocked()
                 .validity(&info("Q-dev-net-71", 1_000 * 20 + HEAD_SLACK_BLOCKS + 1))
                 .unwrap_err();

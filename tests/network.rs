@@ -223,7 +223,10 @@ fn a_plain_url_client_is_refused_a_mainnet_gateway_until_acknowledged() {
     let err = acked
         .transfer(&seed, 0, &to, 1000, 1000)
         .expect_err("an acknowledged url client still needs a trusted roster for mainnet");
-    assert!(err.contains("trusted validator roster"), "{err}");
+    assert!(
+        err.contains("trusted validator roster") || err.contains("no genesis hash is pinned"),
+        "{err}"
+    );
     assert_eq!(
         submits.load(Ordering::SeqCst),
         0,
