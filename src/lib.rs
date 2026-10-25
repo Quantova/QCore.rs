@@ -2211,6 +2211,9 @@ mod client {
                     continue;
                 }
                 let proven = crate::finality::decode_event(&leaf)?;
+                if proven.tx != tx_id {
+                    continue;
+                }
                 if same_address(&proven.contract, contract)
                     && proven.selector == selector
                     && data.is_none_or(|data| data == proven.data.as_slice())

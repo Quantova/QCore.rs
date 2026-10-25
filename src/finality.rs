@@ -52,6 +52,7 @@ pub struct ChainEvent {
     pub contract: String,
     pub selector: [u8; 4],
     pub data: Vec<u8>,
+    pub tx: String,
 }
 
 fn active_set(roster: &[RosterMember]) -> Vec<&RosterMember> {
@@ -555,11 +556,18 @@ pub fn decode_event(leaf: &[u8]) -> Result<ChainEvent, String> {
         .try_into()
         .map_err(|_| malformed())?;
     let data = decoder.get_bytes().map_err(|_| malformed())?.to_vec();
+    let tx = if decoder.remaining() > 0 {
+        String::from_utf8(decoder.get_bytes().map_err(|_| malformed())?.to_vec())
+            .map_err(|_| malformed())?
+    } else {
+        String::new()
+    };
     decoder.finish().map_err(|_| malformed())?;
     Ok(ChainEvent {
         contract,
         selector,
         data,
+        tx,
     })
 }
 
