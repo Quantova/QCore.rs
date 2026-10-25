@@ -400,7 +400,12 @@ fn whole_arg<T: TryFrom<u128>>(text: &str, message: &str) -> Result<T, String> {
 }
 
 fn to_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(char::from_digit((b >> 4) as u32, 16).expect("a nibble is a hex digit"));
+        out.push(char::from_digit((b & 15) as u32, 16).expect("a nibble is a hex digit"));
+    }
+    out
 }
 
 const SEED_BUFFER: usize = 64 * 1024;
