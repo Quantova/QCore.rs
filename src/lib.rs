@@ -1748,7 +1748,10 @@ mod client {
         pinned_chain: std::cell::RefCell<Option<String>>,
         session: std::cell::RefCell<SigningSession>,
         trusted_roster: std::cell::RefCell<Option<TrustedRosters>>,
+        on_signed: Option<SignedHook>,
     }
+
+    type SignedHook = Box<dyn Fn(&str) -> Result<(), String>>;
 
     type TrustedRosters = (
         [u8; 32],
@@ -1768,6 +1771,7 @@ mod client {
             pinned_chain: std::cell::RefCell::new(None),
             trusted_roster: std::cell::RefCell::new(None),
             session: std::cell::RefCell::new(SigningSession::new()),
+            on_signed: None,
         }
     }
 
@@ -1849,6 +1853,11 @@ mod client {
 
         pub fn session(&self) -> SigningSession {
             shared_session().clone()
+        }
+
+        pub fn with_signed_hook(mut self, hook: SignedHook) -> Client {
+            self.on_signed = Some(hook);
+            self
         }
 
         pub fn save_session(&self) -> String {
@@ -2307,6 +2316,10 @@ mod client {
                 for (key, slot) in slots {
                     session.signed(key, *slot);
                 }
+            }
+            if let Some(hook) = &self.on_signed {
+                hook(&self.save_session())
+                    .map_err(|e| format!("the signed nonce could not be saved before submitting, nothing was sent: {e}"))?;
             }
             let outcome = self.submit(&signed.tx_bytes)?;
             let mut session = shared_session();

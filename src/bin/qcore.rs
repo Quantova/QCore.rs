@@ -78,10 +78,14 @@ fn cmd_pubkey(args: &[String]) -> Result<(), String> {
 fn cmd_info(args: &[String]) -> Result<(), String> {
     let gateway = args.first().ok_or("usage: qcore info <gateway-url>")?;
     let info = Client::new(gateway.clone()).node_info()?;
-    println!("chain   {}", info.chain_id);
+    println!("chain   {}", qcore::shown(&info.chain_id));
     println!("height  {}", info.head_height);
-    println!("fee     {} {}", info.transfer_fee, info.denomination);
-    println!("version {}", info.version);
+    println!(
+        "fee     {} {}",
+        info.transfer_fee,
+        qcore::shown(&info.denomination)
+    );
+    println!("version {}", qcore::shown(&info.version));
     Ok(())
 }
 
@@ -103,16 +107,19 @@ fn cmd_register(args: &[String]) -> Result<(), String> {
     load_session(&client)?;
     let result = client.register(&seed, 0, max_fee);
     save_session(&client)?;
-    let (_signed, outcome) = result?;
+    let (signed, outcome) = result?;
     match outcome {
         Submit::Accepted { state, tx_id } => {
-            println!("registered {tx_id}");
-            println!("state      {state}");
+            same_tx(&signed.tx_id, &tx_id)?;
+            println!("registered {}", signed.tx_id);
+            println!("state      {}", qcore::shown(&state));
             Ok(())
         }
-        Submit::Rejected { reason, .. } => {
-            Err(format!("the node rejected the registration: {reason}"))
-        }
+        Submit::Rejected { reason, .. } => Err(format!(
+            "the node rejected the registration {}: {}",
+            signed.tx_id,
+            qcore::shown(&reason)
+        )),
     }
 }
 
@@ -127,7 +134,7 @@ fn cmd_balance(args: &[String]) -> Result<(), String> {
         return Err("the address is not a Q1 address".to_string());
     }
     let account = Client::new(gateway.clone()).account(address)?;
-    println!("address {}", account.address);
+    println!("address {}", qcore::shown(&account.address));
     println!("balance {}", account.balance);
     println!("nonce   {}", account.nonce);
     Ok(())
@@ -153,14 +160,19 @@ fn cmd_send(args: &[String]) -> Result<(), String> {
     load_session(&client)?;
     let result = client.transfer(&seed, 0, to, amount, max_fee);
     save_session(&client)?;
-    let (_signed, outcome) = result?;
+    let (signed, outcome) = result?;
     match outcome {
         Submit::Accepted { state, tx_id } => {
-            println!("submitted {tx_id}");
-            println!("state     {state}");
+            same_tx(&signed.tx_id, &tx_id)?;
+            println!("submitted {}", signed.tx_id);
+            println!("state     {}", qcore::shown(&state));
             Ok(())
         }
-        Submit::Rejected { reason, .. } => Err(format!("the node rejected the transfer: {reason}")),
+        Submit::Rejected { reason, .. } => Err(format!(
+            "the node rejected the transfer {}: {}",
+            signed.tx_id,
+            qcore::shown(&reason)
+        )),
     }
 }
 
@@ -175,7 +187,7 @@ fn cmd_status(args: &[String]) -> Result<(), String> {
         TxStatus::Finalised {
             height,
             block: Some(block),
-        } => println!("finalised at height {height} in block {block}"),
+        } => println!("finalised at height {height} in block {}", qcore::shown(&block)),
         TxStatus::Finalised {
             height,
             block: None,
@@ -313,7 +325,22 @@ fn load_session(client: &Client) -> Result<(), String> {
     }
 }
 
+fn same_tx(signed: &str, reported: &str) -> Result<(), String> {
+    if signed == reported {
+        Ok(())
+    } else {
+        Err(format!(
+            "the gateway accepted {} but this run signed {signed}, do not trust its answer and check {signed} on another gateway",
+            qcore::shown(reported)
+        ))
+    }
+}
+
 fn save_session(client: &Client) -> Result<(), String> {
+    write_session(&client.save_session())
+}
+
+fn write_session(state: &str) -> Result<(), String> {
     let Some(path) = session_path() else {
         return Err("no HOME or QCORE_SESSION to keep the signing session in, refusing to forget the nonces this run signed".to_string());
     };
@@ -332,7 +359,7 @@ fn save_session(client: &Client) -> Result<(), String> {
         .open(&temp)
         .map_err(|e| format!("writing the signing session {}: {e}", temp.display()))?;
     use std::io::Write;
-    file.write_all(client.save_session().as_bytes())
+    file.write_all(state.as_bytes())
         .and_then(|_| file.sync_all())
         .map_err(|e| format!("writing the signing session {}: {e}", temp.display()))?;
     std::fs::rename(&temp, &path)
@@ -359,6 +386,7 @@ fn build_client(
     } else {
         Client::new(gateway.to_string())
     };
+    let client = client.with_signed_hook(Box::new(write_session));
     Ok(match clock {
         Some((genesis, rate)) => client.with_chain_clock(genesis, rate),
         None => client,
