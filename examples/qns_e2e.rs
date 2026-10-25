@@ -816,9 +816,9 @@ fn accepted(outcome: &Submit, what: &str) -> Result<(), String> {
 fn poll_finality(client: &Client, tx_id: &str) -> Result<u64, String> {
     for _ in 0..240 {
         match client.transaction(tx_id)? {
-            TxStatus::Finalised { height, .. } | TxStatus::Unverified { height, .. } => {
-                return Ok(height)
-            }
+            TxStatus::Finalised { height, .. }
+            | TxStatus::Included { height, .. }
+            | TxStatus::Unverified { height, .. } => return Ok(height),
             TxStatus::Pending | TxStatus::Unknown => sleep(Duration::from_millis(250)),
         }
     }

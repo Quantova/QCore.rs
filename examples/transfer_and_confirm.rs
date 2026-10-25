@@ -49,6 +49,10 @@ fn main() {
                 }
                 break;
             }
+            TxStatus::Included { height, .. } => {
+                println!("included at height {height}, its outcome is shown only by its event");
+                break;
+            }
             TxStatus::Unverified { height, .. } => {
                 println!("the gateway reports it finalised at height {height}, unverified without a trusted roster");
                 break;

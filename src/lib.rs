@@ -959,6 +959,7 @@ pub enum Submit {
 #[derive(Debug, Clone)]
 pub enum TxStatus {
     Finalised { height: u64, block: Option<String> },
+    Included { height: u64, block: Option<String> },
     Unverified { height: u64, block: Option<String> },
     Pending,
     Unknown,
@@ -2004,10 +2005,12 @@ mod client {
             };
             if self.anchor_pinned_roster()? {
                 let confirmed = self.confirm_inclusion_trusted(tx_id)?;
-                return Ok(TxStatus::Finalised {
-                    height: confirmed.header.height,
-                    block: qtv_idfmt::render_block(&confirmed.header.hash).ok(),
-                });
+                let height = confirmed.header.height;
+                let block = qtv_idfmt::render_block(&confirmed.header.hash).ok();
+                if confirmed.kind == crate::finality::TxKind::Call {
+                    return Ok(TxStatus::Included { height, block });
+                }
+                return Ok(TxStatus::Finalised { height, block });
             }
             let configured_mainnet = self.network.is_mainnet
                 || self

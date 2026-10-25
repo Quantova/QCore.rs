@@ -180,6 +180,9 @@ fn cmd_status(args: &[String]) -> Result<(), String> {
             height,
             block: None,
         } => println!("finalised at height {height}"),
+        TxStatus::Included { height, .. } => println!(
+            "included at height {height}, a contract call whose outcome is shown only by its event, check it with confirm_call_event"
+        ),
         TxStatus::Unverified { height, .. } => {
             return Err(format!(
                 "UNVERIFIED, the gateway alone reports it finalised at height {height}; no trusted validator roster checked it"
