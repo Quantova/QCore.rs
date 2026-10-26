@@ -120,7 +120,7 @@ fn a_testnet_network_carries_its_identifiers() {
     let testnet = Network::testnet();
     assert_eq!(
         testnet.chain_id.as_deref(),
-        Some("Q-test-net-01"),
+        Some("Q-test-net-0001"),
         "testnet chain id"
     );
     assert_eq!(
@@ -139,7 +139,7 @@ fn a_client_from_a_network_carries_that_network() {
     let client = Client::with_network("http://127.0.0.1:1", Network::testnet(), false);
     assert_eq!(
         client.network().chain_id.as_deref(),
-        Some("Q-test-net-01"),
+        Some("Q-test-net-0001"),
         "the client carries its configured network"
     );
     let refused = Client::for_network(Network::testnet(), false)

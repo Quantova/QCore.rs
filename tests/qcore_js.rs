@@ -32,7 +32,7 @@ fn reference_sign(
     qtv_tx::sign(account, body, genesis)
 }
 
-const VECTOR_CHAIN_ID: u64 = TESTNET_CHAIN_ID;
+const VECTOR_CHAIN_ID: u64 = 6995079887857407393;
 
 const VECTOR_GENESIS: [u8; 32] = [0x11; 32];
 
