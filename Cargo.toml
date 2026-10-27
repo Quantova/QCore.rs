@@ -21,15 +21,15 @@ path = "src/bin/qcore.rs"
 required-features = ["client"]
 
 [dependencies]
-qtv-account = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "e349230bdd653f7436964a3c6de65af367d638be" }
-qtv-tx = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "e349230bdd653f7436964a3c6de65af367d638be" }
-qtv-codec = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "e349230bdd653f7436964a3c6de65af367d638be" }
-qtv-idfmt = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "e349230bdd653f7436964a3c6de65af367d638be" }
+qtv-account = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "4f91c2f7471378150f9dbce0ce5f2e05b80c0cb9" }
+qtv-tx = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "4f91c2f7471378150f9dbce0ce5f2e05b80c0cb9" }
+qtv-codec = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "4f91c2f7471378150f9dbce0ce5f2e05b80c0cb9" }
+qtv-idfmt = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "4f91c2f7471378150f9dbce0ce5f2e05b80c0cb9" }
 qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "04e5ae26a089df4e4cc8f20f3973b7cbbee594e3" }
-qtv-wipe = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "e349230bdd653f7436964a3c6de65af367d638be" }
+qtv-wipe = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "4f91c2f7471378150f9dbce0ce5f2e05b80c0cb9" }
 qtv-vm = { git = "https://github.com/Quantova/QVM.git", rev = "dd69b022d48b8dbfb36b8d26110d15b160fccff6" }
-qtv-block = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "e349230bdd653f7436964a3c6de65af367d638be" }
-qtv-state = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "e349230bdd653f7436964a3c6de65af367d638be" }
+qtv-block = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "4f91c2f7471378150f9dbce0ce5f2e05b80c0cb9" }
+qtv-state = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "4f91c2f7471378150f9dbce0ce5f2e05b80c0cb9" }
 qtv-attest = { git = "https://github.com/Quantova/QRC-CONSENSUS.git", rev = "223e012417d804d2e953445c38c2b87d0bff6b34" }
 qtv-sampler = { git = "https://github.com/Quantova/QRC-CONSENSUS.git", rev = "223e012417d804d2e953445c38c2b87d0bff6b34" }
 
