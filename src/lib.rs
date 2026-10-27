@@ -619,7 +619,15 @@ pub fn check_gateway_json(response: &str) -> Result<(), String> {
 
 static ENTROPY_SOURCE: std::sync::OnceLock<fn(&mut [u8]) -> bool> = std::sync::OnceLock::new();
 
+fn degenerate_randomness(bytes: &[u8]) -> bool {
+    bytes.is_empty() || bytes.iter().all(|&b| b == bytes[0])
+}
+
 pub fn set_entropy_source(source: fn(&mut [u8]) -> bool) -> bool {
+    let mut probe = Zeroizing::new([0u8; 32]);
+    if !source(&mut probe[..]) || degenerate_randomness(&probe[..]) {
+        return false;
+    }
     ENTROPY_SOURCE.set(source).is_ok()
 }
 
@@ -629,7 +637,7 @@ pub fn fresh_randomness() -> Result<Zeroizing<[u8; 32]>, String> {
         Some(source) => source(&mut rnd[..]),
         None => qtv_crypto::rng::try_fill_random(&mut rnd[..]).is_ok(),
     };
-    if !filled || rnd.iter().all(|&b| b == 0) {
+    if !filled || degenerate_randomness(&rnd[..]) {
         return Err("no secure random source is available, refusing to sign".to_string());
     }
     Ok(rnd)
@@ -3570,6 +3578,36 @@ mod client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_degenerate_entropy_source_is_refused_and_signing_stays_on_the_secure_default() {
+        assert!(degenerate_randomness(&[0u8; 32]));
+        assert!(degenerate_randomness(&[7u8; 32]));
+        let mut varied = [0u8; 32];
+        varied[0] = 1;
+        assert!(!degenerate_randomness(&varied));
+
+        fn all_zero(buf: &mut [u8]) -> bool {
+            buf.iter_mut().for_each(|b| *b = 0);
+            true
+        }
+        fn constant(buf: &mut [u8]) -> bool {
+            buf.iter_mut().for_each(|b| *b = 9);
+            true
+        }
+        assert!(
+            !set_entropy_source(all_zero),
+            "an all zero source is refused"
+        );
+        assert!(
+            !set_entropy_source(constant),
+            "a constant source is refused"
+        );
+        assert!(
+            fresh_randomness().is_ok(),
+            "the secure default still yields fresh randomness after a bad source is refused"
+        );
+    }
 
     fn unsigned_part(tx: &[u8]) -> &[u8] {
         let mut tail = Encoder::new();
