@@ -885,7 +885,9 @@ fn is_mainnet_info(info: &NodeInfo) -> bool {
 
 #[cfg(feature = "client")]
 fn is_public_chain(name: &str) -> bool {
-    name.starts_with("Q-test-net-") || is_mainnet_chain(name)
+    name.starts_with("Q-test-net-")
+        || chain_id_from_name(name) == testnet_chain_id()
+        || is_mainnet_chain(name)
 }
 
 pub fn submit_body(tx_bytes: &[u8]) -> String {
