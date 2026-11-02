@@ -1040,7 +1040,13 @@ pub fn lookalike_of(candidate: &str, known: &[String]) -> Option<String> {
 
 pub const SESSION_REMEMBERED_ADDRESSES: usize = 1024;
 
-pub const RETIRED_CHAIN_NAMES: &[&str] = &["Q-test-net-1"];
+pub const RETIRED_CHAIN_NAMES: &[&str] = &[
+    "Q-test-net-1",
+    "Q-test-net-01",
+    "Q-test-net-001",
+    "Q-test-net-0001",
+    "Test-Net-0-1",
+];
 
 #[derive(Debug, Default, Clone)]
 pub struct SigningSession {
@@ -4631,3 +4637,4 @@ mod wire_tests {
         assert!(seed_from_mnemonic_bytes(&[0xff, 0xfe]).is_err());
     }
 }
+
