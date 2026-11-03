@@ -4637,4 +4637,3 @@ mod wire_tests {
         assert!(seed_from_mnemonic_bytes(&[0xff, 0xfe]).is_err());
     }
 }
-
