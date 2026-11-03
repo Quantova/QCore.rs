@@ -18,7 +18,7 @@ pub use qtv_tx::{
     chain_id_from_name, LOCAL_CHAIN_ID, LOCAL_CHAIN_NAME, MAINNET_CHAIN_ID, MAINNET_CHAIN_NAME,
 };
 
-pub const TESTNET_CHAIN_NAME: &str = "Q-TestNet-1";
+pub const TESTNET_CHAIN_NAME: &str = "Q-testNet-1.0";
 
 pub const SEED_LEN: usize = 32;
 
@@ -3932,7 +3932,7 @@ mod tests {
     #[test]
     fn the_testnet_chain_id_follows_the_testnet_network() {
         let configured = Network::testnet().chain_id.unwrap();
-        assert_eq!(configured, "Q-TestNet-1");
+        assert_eq!(configured, "Q-testNet-1.0");
         assert_eq!(testnet_chain_id(), chain_id_from_name(&configured));
         assert_eq!(testnet_chain_id(), qtv_tx::TESTNET_CHAIN_ID);
     }
