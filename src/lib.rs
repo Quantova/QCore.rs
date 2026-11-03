@@ -1046,6 +1046,7 @@ pub const RETIRED_CHAIN_NAMES: &[&str] = &[
     "Q-test-net-001",
     "Q-test-net-0001",
     "Test-Net-0-1",
+    "Q-TestNet-1",
 ];
 
 #[derive(Debug, Default, Clone)]
