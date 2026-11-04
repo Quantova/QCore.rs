@@ -32,7 +32,7 @@ pub const GENESIS_FLOOR_SECS: u64 = 1_735_689_600;
 
 pub const TESTNET_GENESIS_SECS: u64 = 1_793_761_285;
 
-pub const TESTNET_BLOCKS_PER_SEC: u64 = 5;
+pub const TESTNET_BLOCKS_PER_SEC: u64 = 10;
 
 pub const TESTNET_RPC_URL: &str = "https://q-testnet-1-1.quantova.org";
 
