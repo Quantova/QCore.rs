@@ -21,17 +21,17 @@ path = "src/bin/qcore.rs"
 required-features = ["client"]
 
 [dependencies]
-qtv-account = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "9fcac19566b21fa01cdf0e230704263f2b382af6" }
-qtv-tx = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "9fcac19566b21fa01cdf0e230704263f2b382af6" }
-qtv-codec = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "9fcac19566b21fa01cdf0e230704263f2b382af6" }
-qtv-idfmt = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "9fcac19566b21fa01cdf0e230704263f2b382af6" }
-qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "38f41dede65ed1918e89402c61b711defe16ae26" }
-qtv-wipe = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "9fcac19566b21fa01cdf0e230704263f2b382af6" }
-qtv-vm = { git = "https://github.com/Quantova/QVM.git", rev = "4a7854f25ea56d6df69addc314675c9e75f3b3bc" }
-qtv-block = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "9fcac19566b21fa01cdf0e230704263f2b382af6" }
-qtv-state = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "9fcac19566b21fa01cdf0e230704263f2b382af6" }
-qtv-attest = { git = "https://github.com/Quantova/QRC-CONSENSUS.git", rev = "fb9297cde5e447226bc590af47eeb9340d554ca1" }
-qtv-sampler = { git = "https://github.com/Quantova/QRC-CONSENSUS.git", rev = "fb9297cde5e447226bc590af47eeb9340d554ca1" }
+qtv-account = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "1adc3328a4035b50ba05264d4607c692e8925909" }
+qtv-tx = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "1adc3328a4035b50ba05264d4607c692e8925909" }
+qtv-codec = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "1adc3328a4035b50ba05264d4607c692e8925909" }
+qtv-idfmt = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "1adc3328a4035b50ba05264d4607c692e8925909" }
+qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "d85072b4641ac2166124b83b857db6d6cdbf3d5c" }
+qtv-wipe = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "1adc3328a4035b50ba05264d4607c692e8925909" }
+qtv-vm = { git = "https://github.com/Quantova/QVM.git", rev = "5178e4543fc4b8668b5b696172019f4b397c105b" }
+qtv-block = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "1adc3328a4035b50ba05264d4607c692e8925909" }
+qtv-state = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "1adc3328a4035b50ba05264d4607c692e8925909" }
+qtv-attest = { git = "https://github.com/Quantova/QRC-CONSENSUS.git", rev = "c3a51eaa31b638402f186e3b87fa160ba5488846" }
+qtv-sampler = { git = "https://github.com/Quantova/QRC-CONSENSUS.git", rev = "c3a51eaa31b638402f186e3b87fa160ba5488846" }
 
 [profile.release]
 overflow-checks = true
