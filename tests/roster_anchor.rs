@@ -46,7 +46,11 @@ fn a_gateway_roster_that_is_not_the_pinned_one_cannot_reproduce_its_commitment()
         (4, &k4, "2000", &root),
     ]))
     .expect("parses");
-    assert_eq!(roster_commitment_of(0, &same), pin, "the pinned roster reproduces its own commitment");
+    assert_eq!(
+        roster_commitment_of(0, &same),
+        pin,
+        "the pinned roster reproduces its own commitment"
+    );
 
     let forged_key = parse_roster(&roster_json(&[
         (1, &ke, "2000", &root),
@@ -55,7 +59,11 @@ fn a_gateway_roster_that_is_not_the_pinned_one_cannot_reproduce_its_commitment()
         (4, &k4, "2000", &root),
     ]))
     .expect("parses");
-    assert_ne!(roster_commitment_of(0, &forged_key), pin, "a swapped validator key cannot match the pin");
+    assert_ne!(
+        roster_commitment_of(0, &forged_key),
+        pin,
+        "a swapped validator key cannot match the pin"
+    );
 
     let inflated = parse_roster(&roster_json(&[
         (1, &k1, "999999", &root),
@@ -64,7 +72,11 @@ fn a_gateway_roster_that_is_not_the_pinned_one_cannot_reproduce_its_commitment()
         (4, &k4, "2000", &root),
     ]))
     .expect("parses");
-    assert_ne!(roster_commitment_of(0, &inflated), pin, "an inflated stake cannot match the pin");
+    assert_ne!(
+        roster_commitment_of(0, &inflated),
+        pin,
+        "an inflated stake cannot match the pin"
+    );
 
     let dropped = parse_roster(&roster_json(&[
         (1, &k1, "2000", &root),
@@ -72,5 +84,9 @@ fn a_gateway_roster_that_is_not_the_pinned_one_cannot_reproduce_its_commitment()
         (3, &k3, "2000", &root),
     ]))
     .expect("parses");
-    assert_ne!(roster_commitment_of(0, &dropped), pin, "a dropped validator cannot match the pin");
+    assert_ne!(
+        roster_commitment_of(0, &dropped),
+        pin,
+        "a dropped validator cannot match the pin"
+    );
 }
